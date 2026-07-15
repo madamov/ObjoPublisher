@@ -1,0 +1,291 @@
+name: Reusable Objo Linux Publish
+
+on:
+  workflow_call:
+    inputs:
+      solution-file:
+        description: Path to the Objo solution file
+        required: true
+        type: string
+
+      output-directory:
+        description: Directory inside the current user's home directory
+        required: false
+        type: string
+        default: Publish
+
+      targets:
+        description: Linux targets to publish, comma separated
+        required: false
+        type: string
+        default: "linux-x64"
+
+      artifact-name:
+        description: Uploaded artifact name
+        required: false
+        type: string
+        default: objo-linux-publish
+
+      objo-version:
+        description: Objo Studio version; leave empty to detect latest
+        required: false
+        type: string
+        default: ""
+
+    secrets:
+      objo-license:
+        required: true
+
+jobs:
+  publish-linux:
+    name: Publish Linux application
+    runs-on: ubuntu-latest
+
+    env:
+      SOLUTION_FILE: ${{ inputs.solution-file }}
+      OBJO_LICENSE: ${{ secrets.objo-license }}
+
+    steps:
+      - name: Check out application repository
+        uses: actions/checkout@v4
+
+      - name: Set output directory
+        shell: bash
+        env:
+          OUTPUT_FOLDER: ${{ inputs.output-directory }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$OUTPUT_FOLDER" ]]; then
+            echo "Output directory input cannot be empty." >&2
+            exit 1
+          fi
+
+          if [[ "$OUTPUT_FOLDER" = /* ]]; then
+            OUTPUT_DIRECTORY="$OUTPUT_FOLDER"
+          else
+            OUTPUT_DIRECTORY="$HOME/$OUTPUT_FOLDER"
+          fi
+
+          echo "OUTPUT_DIRECTORY=$OUTPUT_DIRECTORY" >> "$GITHUB_ENV"
+          echo "Output directory: $OUTPUT_DIRECTORY"
+
+      - name: Validate workflow inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f "$SOLUTION_FILE" ]]; then
+            echo "Objo solution file was not found: $SOLUTION_FILE" >&2
+            exit 1
+          fi
+
+      - name: Determine Objo Studio version
+        id: version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.objo-version }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            VERSION="$REQUESTED_VERSION"
+          else
+            VERSION="$(
+              curl -fsSL https://objo.dev/download |
+                grep -oE \
+                  'Latest version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' |
+                head -n 1 |
+                sed -E 's/Latest version:[[:space:]]*//'
+            )"
+          fi
+
+          if [[ -z "$VERSION" ]]; then
+            echo "Could not determine the Objo Studio version." >&2
+            exit 1
+          fi
+
+          echo "Using Objo Studio version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Objo Studio cache
+        id: cache-objo
+        uses: actions/cache@v4
+        with:
+          path: /opt/objo-studio
+          key: objo-studio-linux-${{ steps.version.outputs.version }}
+
+      - name: Download and extract Objo Studio
+        if: steps.cache-objo.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          ARCHIVE="$RUNNER_TEMP/Objo-Studio-${VERSION}-linux-x64.tar.gz"
+          URL="https://downloads.objo.dev/releases/${VERSION}/Objo-Studio-${VERSION}-linux-x64.tar.gz"
+
+          sudo rm -rf /opt/objo-studio
+          sudo mkdir -p /opt/objo-studio
+          sudo chown "$USER":"$(id -gn)" /opt/objo-studio
+
+          curl -fL "$URL" -o "$ARCHIVE"
+          tar -xzf "$ARCHIVE" -C /opt/objo-studio
+
+      - name: Find Objo executable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OBJO_BIN="$(
+            find /opt/objo-studio \
+              -type f \
+              -name objo |
+              head -n 1
+          )"
+
+          if [[ -z "$OBJO_BIN" ]]; then
+            echo "Could not find the Objo executable." >&2
+            exit 1
+          fi
+
+          chmod +x "$OBJO_BIN"
+          echo "OBJO_BIN=$OBJO_BIN" >> "$GITHUB_ENV"
+
+          echo "Objo executable: $OBJO_BIN"
+
+      - name: Activate Objo license
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LICENSE_FILE="$RUNNER_TEMP/objo-license-key.txt"
+
+          cleanup_license_file() {
+            rm -f "$LICENSE_FILE"
+          }
+
+          trap cleanup_license_file EXIT
+
+          printf '%s' "$OBJO_LICENSE" > "$LICENSE_FILE"
+
+          "$OBJO_BIN" license activate \
+            --key-file "$LICENSE_FILE"
+
+      - name: Publish Linux application
+        shell: bash
+        env:
+          PUBLISH_TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+
+          cleanup() {
+            echo "Deactivating Objo license..."
+            "$OBJO_BIN" license deactivate || true
+
+            if [[ -d "$OUTPUT_DIRECTORY" ]]; then
+              echo "Output directory contents:"
+              find "$OUTPUT_DIRECTORY" \
+                -maxdepth 4 \
+                -type f \
+                -print || true
+            fi
+          }
+
+          trap cleanup EXIT
+
+          mkdir -p "$OUTPUT_DIRECTORY"
+          echo "Publishing to: $OUTPUT_DIRECTORY"
+
+          cmd=(
+            "$OBJO_BIN"
+            publish
+            "$SOLUTION_FILE"
+          )
+
+          IFS=',' read -ra TARGET_LIST <<< "$PUBLISH_TARGETS"
+
+          target_count=0
+
+          for target in "${TARGET_LIST[@]}"; do
+            target="$(
+              printf '%s' "$target" |
+                sed -E \
+                  's/^[[:space:]]+//; s/[[:space:]]+$//'
+            )"
+
+            if [[ -z "$target" ]]; then
+              continue
+            fi
+
+            echo "Adding publish target: $target"
+            cmd+=(--rid "$target")
+            ((target_count += 1))
+          done
+
+          if (( target_count == 0 )); then
+            echo "No valid Linux publish targets were provided." >&2
+            exit 1
+          fi
+
+          cmd+=(--output "$OUTPUT_DIRECTORY")
+
+          echo "Running command:"
+          printf ' %q' "${cmd[@]}"
+          echo
+
+          "${cmd[@]}"
+
+      - name: Collect Linux archives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ARTIFACT_DIR="$OUTPUT_DIRECTORY/artifacts"
+          mkdir -p "$ARTIFACT_DIR"
+
+          archive_count=0
+
+          while IFS= read -r -d '' archive; do
+            archive_name="$(basename "$archive")"
+            destination="$ARTIFACT_DIR/$archive_name"
+
+            if [[ -e "$destination" ]]; then
+              parent_name="$(
+                basename "$(dirname "$(dirname "$archive")")"
+              )"
+
+              destination="$ARTIFACT_DIR/${parent_name}-${archive_name}"
+            fi
+
+            cp "$archive" "$destination"
+            echo "Collected: $archive"
+            ((archive_count += 1))
+          done < <(
+            find "$OUTPUT_DIRECTORY" \
+              -type f \
+              \( \
+                -name '*.tar.gz' \
+                -o -name '*.tgz' \
+                -o -name '*.zip' \
+              \) \
+              ! -path "$ARTIFACT_DIR/*" \
+              -print0
+          )
+
+          if (( archive_count == 0 )); then
+            echo "No Linux archives were found to upload." >&2
+            exit 1
+          fi
+
+          echo "Prepared Linux artifacts:"
+          ls -lh "$ARTIFACT_DIR"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ env.OUTPUT_DIRECTORY }}/artifacts/*
+          if-no-files-found: error
+          
