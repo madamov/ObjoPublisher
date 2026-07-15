@@ -14,6 +14,17 @@ on:
         type: string
         default: Publish
 
+      project-file:
+        description: Path to project.json
+        required: true
+        type: string
+
+      application-name:
+        description: Application name
+        required: true
+        type: string
+
+
       targets:
         description: Linux targets to publish, comma separated
         required: false
@@ -43,8 +54,10 @@ jobs:
 
     env:
       SOLUTION_FILE: ${{ inputs.solution-file }}
+      PROJECT_FILE: ${{ inputs.project-file }}
+      APPLICATION_NAME: ${{ inputs.application-name }}
       OBJO_LICENSE: ${{ secrets.objo-license }}
-
+      
     steps:
       - name: Check out application repository
         uses: actions/checkout@v4
@@ -80,6 +93,21 @@ jobs:
             exit 1
           fi
 
+          if [[ ! -f "$PROJECT_FILE" ]]; then
+            echo "Objo project file was not found: $PROJECT_FILE" >&2
+            exit 1
+          fi
+
+          if ! jq empty "$PROJECT_FILE"; then
+            echo "Project file is not valid JSON: $PROJECT_FILE" >&2
+            exit 1
+          fi
+
+          if [[ -z "$APPLICATION_NAME" ]]; then
+            echo "Application name cannot be empty." >&2
+            exit 1
+          fi
+          
       - name: Determine Objo Studio version
         id: version
         shell: bash
@@ -249,18 +277,43 @@ jobs:
 
           while IFS= read -r -d '' archive; do
             archive_name="$(basename "$archive")"
-            destination="$ARTIFACT_DIR/$archive_name"
 
+            target_name="$(
+              basename "$(dirname "$archive")"
+            )"
+
+            case "$archive_name" in
+              *.tar.gz)
+                extension="tar.gz"
+                ;;
+
+              *.tgz)
+                extension="tgz"
+                ;;
+
+              *.zip)
+                extension="zip"
+                ;;
+
+              *)
+                echo "Unsupported archive type, skipping: $archive"
+                continue
+                ;;
+            esac
+
+            destination="$ARTIFACT_DIR/${APPLICATION_NAME}-${target_name}.${extension}"
+
+            # Avoid overwriting if two archives resolve to the same name.
             if [[ -e "$destination" ]]; then
-              parent_name="$(
-                basename "$(dirname "$(dirname "$archive")")"
-              )"
-
-              destination="$ARTIFACT_DIR/${parent_name}-${archive_name}"
+              destination="$ARTIFACT_DIR/${APPLICATION_NAME}-${archive_count}.${extension}"
             fi
 
             cp "$archive" "$destination"
-            echo "Collected: $archive"
+
+            echo "Collected:"
+            echo "  Source:      $archive"
+            echo "  Destination: $destination"
+
             ((archive_count += 1))
           done < <(
             find "$OUTPUT_DIRECTORY" \
@@ -281,7 +334,7 @@ jobs:
 
           echo "Prepared Linux artifacts:"
           ls -lh "$ARTIFACT_DIR"
-
+          
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
