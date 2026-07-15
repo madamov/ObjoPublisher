@@ -1,1 +1,6 @@
+.objo/
+Build/
+Publish/
+bin/
+obj/
 .DS_Store
