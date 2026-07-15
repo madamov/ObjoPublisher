@@ -12,7 +12,7 @@ on:
         description: Directory where Objo publishes the application
         required: false
         type: string
-        default: ~/Documents/ObjoPublish
+        default: Publish
 
       project-file:
         description: Path to project.json
