@@ -430,9 +430,10 @@ jobs:
             --rid osx-arm64 \
             --rid osx-x64 \
             --output "$OUTPUT_DIRECTORY"
-            - name: Collect macOS disk images
-              shell: bash
-              run: |
+            
+        - name: Collect macOS disk images
+            shell: bash
+            run: |
                 set -euo pipefail
       
                 ARTIFACT_DIR="$OUTPUT_DIRECTORY/artifacts"
