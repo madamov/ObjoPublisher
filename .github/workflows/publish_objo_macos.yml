@@ -14,6 +14,12 @@ on:
         type: string
         default: Publish
 
+      targets:
+        description: macOS format to publish to, comma separated
+        required: false
+        type: string
+        default: osx-arm64,osx-x64
+
       project-file:
         description: Path to project.json
         required: true
@@ -422,10 +428,38 @@ jobs:
           mkdir -p "$OUTPUT_DIRECTORY"
           echo $OUTPUT_DIRECTORY
       
-          "$OBJO_BIN" publish "$SOLUTION_FILE" \
-            --rid osx-arm64 \
-            --rid osx-x64 \
-            --output "$OUTPUT_DIRECTORY"
+#          "$OBJO_BIN" publish "$SOLUTION_FILE" \
+#            --rid osx-arm64 \
+#            --rid osx-x64 \
+#            --output "$OUTPUT_DIRECTORY"
+
+           # Build the publish command
+           cmd=(
+             "$OBJO_BIN"
+             publish
+             "$SOLUTION_FILE"
+           )
+           
+           # Split comma-separated targets, trim whitespace and add one --rid per target
+           IFS=',' read -ra TARGETS <<< "${{ inputs.targets }}"
+           
+           for target in "${TARGETS[@]}"; do
+             # Trim leading/trailing whitespace
+             target="$(echo "$target" | xargs)"
+           
+             [[ -z "$target" ]] && continue
+           
+             cmd+=(--rid "$target")
+           done
+           
+           cmd+=(--output "$OUTPUT_DIRECTORY")
+           
+           echo "Running:"
+           printf ' %q' "${cmd[@]}"
+           echo
+           
+           "${cmd[@]}"
+
             
       - name: Collect macOS disk images
         shell: bash
