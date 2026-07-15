@@ -82,12 +82,16 @@ jobs:
       PROJECT_FILE: ${{ inputs.project-file }}
       SOLUTION_FILE: ${{ inputs.solution-file }}
       APPLICATION_NAME: ${{ inputs.application-name }}
-      OUTPUT_DIRECTORY: ${{ inputs.output-directory }}
 
     steps:
       # This checks out the repository that called this reusable workflow.
       - name: Check out application repository
         uses: actions/checkout@v4
+
+      - name: Set output directory
+        shell: bash
+        run: |
+            echo "OUTPUT_DIRECTORY=$HOME/Documents/ObjoPublisher" >> "$GITHUB_ENV"
 
       - name: Check Apple signing parameters
         id: apple-signing
@@ -411,8 +415,6 @@ jobs:
             "$OBJO_BIN" license deactivate || true
             echo "Output directory contents:"
             ls -alR $OUTPUT_DIRECTORY
-            echo "Publish directory contents:"
-            ls -alR Publish
           }
       
           trap cleanup EXIT
