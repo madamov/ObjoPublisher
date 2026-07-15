@@ -431,38 +431,36 @@ jobs:
             --rid osx-x64 \
             --output "$OUTPUT_DIRECTORY"
             
-        - name: Collect macOS disk images
-            shell: bash
-            run: |
-                set -euo pipefail
+      - name: Collect macOS disk images
+        shell: bash
+        run: |
+          set -euo pipefail
       
-                ARTIFACT_DIR="$OUTPUT_DIRECTORY/artifacts"
+          ARTIFACT_DIR="$OUTPUT_DIRECTORY/artifacts"
+
+          ARM_DMG="$OUTPUT_DIRECTORY/macOS-Apple-Silicon/$APPLICATION_NAME.dmg"
+          INTEL_DMG="$OUTPUT_DIRECTORY/macOS-Intel/$APPLICATION_NAME.dmg"
       
-                ARM_DMG="$OUTPUT_DIRECTORY/macOS-Apple-Silicon/$APPLICATION_NAME.dmg"
-                INTEL_DMG="$OUTPUT_DIRECTORY/macOS-Intel/$APPLICATION_NAME.dmg"
+          mkdir -p "$ARTIFACT_DIR"
       
-                mkdir -p "$ARTIFACT_DIR"
-      
-                if [[ ! -f "$ARM_DMG" ]]; then
+          if [[ ! -f "$ARM_DMG" ]]; then
                   echo "Apple Silicon DMG was not found:" >&2
                   echo "$ARM_DMG" >&2
                   exit 1
-                fi
+          fi
       
-                if [[ ! -f "$INTEL_DMG" ]]; then
+          if [[ ! -f "$INTEL_DMG" ]]; then
                   echo "Intel DMG was not found:" >&2
                   echo "$INTEL_DMG" >&2
                   exit 1
-                fi
+          fi
       
-                cp "$ARM_DMG" \
-                  "$ARTIFACT_DIR/$APPLICATION_NAME-macOS-Apple-Silicon.dmg"
+          cp "$ARM_DMG" "$ARTIFACT_DIR/$APPLICATION_NAME-macOS-Apple-Silicon.dmg"
       
-                cp "$INTEL_DMG" \
-                  "$ARTIFACT_DIR/$APPLICATION_NAME-macOS-Intel.dmg"
+          cp "$INTEL_DMG" "$ARTIFACT_DIR/$APPLICATION_NAME-macOS-Intel.dmg"
       
-                echo "Prepared artifacts:"
-                ls -lh "$ARTIFACT_DIR"
+          echo "Prepared artifacts:"
+          ls -lh "$ARTIFACT_DIR"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
