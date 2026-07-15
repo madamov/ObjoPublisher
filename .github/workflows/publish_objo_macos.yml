@@ -8,6 +8,12 @@ on:
         required: true
         type: string
 
+      output-directory:
+        description: Directory where Objo publishes the application
+        required: false
+        type: string
+        default: ~/Documents/ObjoPublish
+
       project-file:
         description: Path to project.json
         required: true
