@@ -72,11 +72,12 @@ jobs:
 
     env:
       APPLE_CERTIFICATE: ${{ secrets.apple-certificate }}
-      APPLE_CERTIFICATE_NAME: ${{ inputs.apple-certificate-name }}
+      APPLE_CERTIFICATE_NAME: ${{ secrets.apple-certificate-name }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.apple-certificate-password }}
-      APPLE_TEAM_ID: ${{ inputs.apple-team-id }}
+      APPLE_TEAM_ID: ${{ secrets.apple-team-id }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.apple-app-specific-password }}
-      APPLE_ID: ${{ inputs.apple-id }}
+      APPLE_ID: ${{ secrets.apple-id }}
+      OBJO_LICENSE: ${{ secrets.objo-license }}
       APPLE_NOTARY_PROFILE: ${{ inputs.apple-notary-profile }}
       PROJECT_FILE: ${{ inputs.project-file }}
       SOLUTION_FILE: ${{ inputs.solution-file }}
