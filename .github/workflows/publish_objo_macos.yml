@@ -9,73 +9,55 @@ on:
         type: string
 
       project-file:
-        description: Path to the Objo project.json file
+        description: Path to project.json
         required: true
         type: string
 
       application-name:
-        description: Application name used for generated DMG files
+        description: Application name
         required: true
         type: string
 
-      output-directory:
-        description: Directory where Objo publishes the application
-        required: false
-        type: string
-        default: ~/Documents/Publish
-
       artifact-name:
-        description: Name of the uploaded GitHub artifact
+        description: Uploaded artifact name
         required: false
         type: string
         default: objo-macos-publish
 
       apple-notary-profile:
-        description: Temporary keychain profile name used by notarytool
+        description: Notarytool profile name
         required: false
         type: string
         default: objo-notarization
 
       objo-version:
-        description: Specific Objo Studio version, or empty to detect the latest version
-        required: false
-        type: string
-        default: ""
-
-      apple-certificate-name:
-        description: Apple Developer ID Application certificate name
-        required: false
-        type: string
-        default: ""
-
-      apple-team-id:
-        description: Apple Developer Team ID
-        required: false
-        type: string
-        default: ""
-
-      apple-id:
-        description: Apple ID used for notarization
+        description: Objo Studio version
         required: false
         type: string
         default: ""
 
     secrets:
       apple-certificate:
-        description: Base64-encoded Apple signing certificate
-        required: false
+        required: true
+
+      apple-certificate-name:
+        required: true
 
       apple-certificate-password:
-        description: Password for the Apple PKCS#12 certificate
-        required: false
+        required: true
+
+      apple-team-id:
+        required: true
+
+      apple-id:
+        required: true
 
       apple-app-specific-password:
-        description: Apple app-specific password used by notarytool
-        required: false
+        required: true
 
       objo-license:
-        description: Objo Studio license key
         required: true
+
 
 jobs:
   publish-macos:
