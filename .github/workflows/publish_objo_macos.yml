@@ -1,0 +1,486 @@
+name: Reusable Objo macOS Publish
+
+on:
+  workflow_call:
+    inputs:
+      solution-file:
+        description: Path to the Objo solution file
+        required: true
+        type: string
+
+      project-file:
+        description: Path to the Objo project.json file
+        required: true
+        type: string
+
+      application-name:
+        description: Application name used for generated DMG files
+        required: true
+        type: string
+
+      output-directory:
+        description: Directory where Objo publishes the application
+        required: false
+        type: string
+        default: ~/Documents/Publish
+
+      artifact-name:
+        description: Name of the uploaded GitHub artifact
+        required: false
+        type: string
+        default: objo-macos-publish
+
+      apple-notary-profile:
+        description: Temporary keychain profile name used by notarytool
+        required: false
+        type: string
+        default: objo-notarization
+
+      objo-version:
+        description: Specific Objo Studio version, or empty to detect the latest version
+        required: false
+        type: string
+        default: ""
+
+      apple-certificate-name:
+        description: Apple Developer ID Application certificate name
+        required: false
+        type: string
+        default: ""
+
+      apple-team-id:
+        description: Apple Developer Team ID
+        required: false
+        type: string
+        default: ""
+
+      apple-id:
+        description: Apple ID used for notarization
+        required: false
+        type: string
+        default: ""
+
+    secrets:
+      apple-certificate:
+        description: Base64-encoded Apple signing certificate
+        required: false
+
+      apple-certificate-password:
+        description: Password for the Apple PKCS#12 certificate
+        required: false
+
+      apple-app-specific-password:
+        description: Apple app-specific password used by notarytool
+        required: false
+
+      objo-license:
+        description: Objo Studio license key
+        required: true
+
+jobs:
+  publish-macos:
+    name: Publish macOS application
+    runs-on: macos-latest
+
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.apple-certificate }}
+      APPLE_CERTIFICATE_NAME: ${{ inputs.apple-certificate-name }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.apple-certificate-password }}
+      APPLE_TEAM_ID: ${{ inputs.apple-team-id }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.apple-app-specific-password }}
+      APPLE_ID: ${{ inputs.apple-id }}
+      APPLE_NOTARY_PROFILE: ${{ inputs.apple-notary-profile }}
+      PROJECT_FILE: ${{ inputs.project-file }}
+      SOLUTION_FILE: ${{ inputs.solution-file }}
+      APPLICATION_NAME: ${{ inputs.application-name }}
+      OUTPUT_DIRECTORY: ${{ inputs.output-directory }}
+
+    steps:
+      # This checks out the repository that called this reusable workflow.
+      - name: Check out application repository
+        uses: actions/checkout@v4
+
+      - name: Check Apple signing parameters
+        id: apple-signing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=()
+
+          [[ -n "$APPLE_CERTIFICATE" ]] \
+            || missing+=("apple-certificate")
+
+          [[ -n "$APPLE_CERTIFICATE_NAME" ]] \
+            || missing+=("apple-certificate-name")
+
+          [[ -n "$APPLE_CERTIFICATE_PASSWORD" ]] \
+            || missing+=("apple-certificate-password")
+
+          [[ -n "$APPLE_TEAM_ID" ]] \
+            || missing+=("apple-team-id")
+
+          [[ -n "$APPLE_ID" ]] \
+            || missing+=("apple-id")
+
+          [[ -n "$APPLE_APP_SPECIFIC_PASSWORD" ]] \
+            || missing+=("apple-app-specific-password")
+
+          if (( ${#missing[@]} > 0 )); then
+            echo "Apple signing configuration is incomplete."
+            echo "Signing and notarization will be skipped."
+            echo "Missing values: ${missing[*]}"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "All Apple signing and notarization values are available."
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate workflow inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f "$SOLUTION_FILE" ]]; then
+            echo "Objo solution file was not found: $SOLUTION_FILE" >&2
+            exit 1
+          fi
+
+          if [[ ! -f "$PROJECT_FILE" ]]; then
+            echo "Objo project file was not found: $PROJECT_FILE" >&2
+            exit 1
+          fi
+
+          if ! jq empty "$PROJECT_FILE"; then
+            echo "Project file is not valid JSON: $PROJECT_FILE" >&2
+            exit 1
+          fi
+
+      - name: Install Apple signing certificate
+        if: steps.apple-signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CERTIFICATE_PATH="$RUNNER_TEMP/apple-signing-certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/apple-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+
+          printf '%s' "$APPLE_CERTIFICATE" |
+            base64 --decode > "$CERTIFICATE_PATH"
+
+          security create-keychain \
+            -p "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          security set-keychain-settings \
+            -lut 21600 \
+            "$KEYCHAIN_PATH"
+
+          security unlock-keychain \
+            -p "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          security import "$CERTIFICATE_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          security list-keychains \
+            -d user \
+            -s "$KEYCHAIN_PATH" login.keychain-db
+
+          security default-keychain \
+            -d user \
+            -s "$KEYCHAIN_PATH"
+
+          rm -f "$CERTIFICATE_PATH"
+
+          {
+            echo "APPLE_KEYCHAIN_PATH=$KEYCHAIN_PATH"
+            echo "APPLE_KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+          echo "Installed signing identities:"
+          security find-identity \
+            -v \
+            -p codesigning \
+            "$KEYCHAIN_PATH"
+
+      - name: Verify expected Apple certificate
+        if: steps.apple-signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! security find-identity \
+            -v \
+            -p codesigning \
+            "$APPLE_KEYCHAIN_PATH" |
+            grep -Fq "$APPLE_CERTIFICATE_NAME"; then
+
+            echo "Expected certificate was not found:" >&2
+            echo "$APPLE_CERTIFICATE_NAME" >&2
+            exit 1
+          fi
+
+          echo "Certificate verified: $APPLE_CERTIFICATE_NAME"
+
+      - name: Report unsigned build
+        if: steps.apple-signing.outputs.available != 'true'
+        shell: bash
+        run: |
+          echo "Apple signing values were not fully provided."
+          echo "The application will be published without Apple signing configuration."
+
+      - name: Create Apple notarization profile
+        if: steps.apple-signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Creating notarization profile: $APPLE_NOTARY_PROFILE"
+
+          xcrun notarytool store-credentials "$APPLE_NOTARY_PROFILE" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --keychain "$APPLE_KEYCHAIN_PATH"
+
+      - name: Configure macOS signing in project.json
+        if: steps.apple-signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TMP_FILE="$(mktemp)"
+
+          jq \
+            --arg identity "$APPLE_CERTIFICATE_NAME" \
+            --arg team "$APPLE_TEAM_ID" \
+            --arg profile "$APPLE_NOTARY_PROFILE" \
+            '
+              .Metadata.Signing.MacOS.SigningIdentity = $identity |
+              .Metadata.Signing.MacOS.TeamId = $team |
+              .Metadata.Signing.MacOS.NotarizationProfile = $profile
+            ' \
+            "$PROJECT_FILE" > "$TMP_FILE"
+
+          mv "$TMP_FILE" "$PROJECT_FILE"
+
+          echo "Updated macOS signing configuration:"
+          jq '.Metadata.Signing.MacOS' "$PROJECT_FILE"
+
+      - name: Determine Objo Studio version
+        id: version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.objo-version }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            VERSION="$REQUESTED_VERSION"
+          else
+            VERSION="$(
+              curl -fsSL https://objo.dev/download |
+              grep -oE \
+                'Latest version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' |
+              head -n 1 |
+              sed -E 's/Latest version:[[:space:]]*//'
+            )"
+          fi
+
+          if [[ -z "$VERSION" ]]; then
+            echo "Could not determine the Objo Studio version." >&2
+            exit 1
+          fi
+
+          echo "Using Objo Studio version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Objo Studio cache
+        id: cache-objo
+        uses: actions/cache@v4
+        with:
+          path: /Applications/Objo Studio.app
+          key: objo-studio-macos-${{ steps.version.outputs.version }}
+
+      - name: Download and install Objo Studio
+        if: steps.cache-objo.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          DMG="$RUNNER_TEMP/Objo-Studio-${VERSION}-macOS-arm64.dmg"
+          URL="https://downloads.objo.dev/releases/${VERSION}/Objo-Studio-${VERSION}-macOS-arm64.dmg"
+          MOUNT_POINT=""
+
+          cleanup_mount() {
+            if [[ -n "$MOUNT_POINT" ]] &&
+               mount | grep -Fq "on $MOUNT_POINT "; then
+              hdiutil detach "$MOUNT_POINT" -quiet || true
+            fi
+          }
+
+          trap cleanup_mount EXIT
+
+          curl -fL "$URL" -o "$DMG"
+
+          MOUNT_POINT="$(
+            hdiutil attach "$DMG" -nobrowse |
+            awk '
+              /\/Volumes\// {
+                print substr($0, index($0, "/Volumes/"))
+                exit
+              }
+            '
+          )"
+
+          if [[ -z "$MOUNT_POINT" ]]; then
+            echo "Could not determine the DMG mount point." >&2
+            exit 1
+          fi
+
+          APP_PATH="$(
+            find "$MOUNT_POINT" \
+              -maxdepth 2 \
+              -name "Objo Studio.app" \
+              -type d |
+            head -n 1
+          )"
+
+          if [[ -z "$APP_PATH" ]]; then
+            echo "Could not find Objo Studio.app inside the DMG." >&2
+            exit 1
+          fi
+
+          rm -rf "/Applications/Objo Studio.app"
+          ditto "$APP_PATH" "/Applications/Objo Studio.app"
+
+          hdiutil detach "$MOUNT_POINT" -quiet
+          MOUNT_POINT=""
+
+      - name: Find Objo executable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OBJO_BIN="$(
+            find "/Applications/Objo Studio.app" \
+              -type f \
+              -name objo |
+            head -n 1
+          )"
+
+          if [[ -z "$OBJO_BIN" ]]; then
+            echo "Could not find the Objo command-line executable." >&2
+            exit 1
+          fi
+
+          chmod +x "$OBJO_BIN"
+          echo "OBJO_BIN=$OBJO_BIN" >> "$GITHUB_ENV"
+
+          echo "Objo executable: $OBJO_BIN"
+
+      - name: Activate Objo license
+        shell: bash
+        env:
+          OBJO_LICENSE: ${{ secrets.objo-license }}
+        run: |
+          set -euo pipefail
+
+          LICENSE_FILE="$RUNNER_TEMP/objo-license-key.txt"
+
+          cleanup_license_file() {
+            rm -f "$LICENSE_FILE"
+          }
+
+          trap cleanup_license_file EXIT
+
+          printf '%s' "$OBJO_LICENSE" > "$LICENSE_FILE"
+
+          "$OBJO_BIN" license activate \
+            --key-file "$LICENSE_FILE"
+
+      - name: Publish macOS application
+        shell: bash
+        run: |
+          set -euo pipefail
+      
+          cleanup() {
+            echo "Deactivating Objo license..."
+            "$OBJO_BIN" license deactivate || true
+          }
+      
+          trap cleanup EXIT
+      
+          mkdir -p "$OUTPUT_DIRECTORY"
+      
+          "$OBJO_BIN" publish "$SOLUTION_FILE" \
+            --rid osx-arm64 \
+            --rid osx-x64 \
+            --output "$OUTPUT_DIRECTORY"
+            - name: Collect macOS disk images
+              shell: bash
+              run: |
+                set -euo pipefail
+      
+                ARTIFACT_DIR="$OUTPUT_DIRECTORY/artifacts"
+      
+                ARM_DMG="$OUTPUT_DIRECTORY/macOS-Apple-Silicon/$APPLICATION_NAME.dmg"
+                INTEL_DMG="$OUTPUT_DIRECTORY/macOS-Intel/$APPLICATION_NAME.dmg"
+      
+                mkdir -p "$ARTIFACT_DIR"
+      
+                if [[ ! -f "$ARM_DMG" ]]; then
+                  echo "Apple Silicon DMG was not found:" >&2
+                  echo "$ARM_DMG" >&2
+                  exit 1
+                fi
+      
+                if [[ ! -f "$INTEL_DMG" ]]; then
+                  echo "Intel DMG was not found:" >&2
+                  echo "$INTEL_DMG" >&2
+                  exit 1
+                fi
+      
+                cp "$ARM_DMG" \
+                  "$ARTIFACT_DIR/$APPLICATION_NAME-macOS-Apple-Silicon.dmg"
+      
+                cp "$INTEL_DMG" \
+                  "$ARTIFACT_DIR/$APPLICATION_NAME-macOS-Intel.dmg"
+      
+                echo "Prepared artifacts:"
+                ls -lh "$ARTIFACT_DIR"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.output-directory }}/artifacts/*.dmg
+          if-no-files-found: error
+
+      - name: Remove temporary Apple keychain
+        if: always() && env.APPLE_KEYCHAIN_PATH != ''
+        shell: bash
+        run: |
+          security default-keychain \
+            -d user \
+            -s login.keychain-db || true
+
+          security list-keychains \
+            -d user \
+            -s login.keychain-db || true
+
+          security delete-keychain \
+            "$APPLE_KEYCHAIN_PATH" || true
