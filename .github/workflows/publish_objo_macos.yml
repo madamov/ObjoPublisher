@@ -409,11 +409,16 @@ jobs:
           cleanup() {
             echo "Deactivating Objo license..."
             "$OBJO_BIN" license deactivate || true
+            echo "Output directory contents:"
+            ls -alR $OUTPUT_DIRECTORY
+            echo "Publish directory contents:"
+            ls -alR Publish
           }
       
           trap cleanup EXIT
       
           mkdir -p "$OUTPUT_DIRECTORY"
+          echo $OUTPUT_DIRECTORY
       
           "$OBJO_BIN" publish "$SOLUTION_FILE" \
             --rid osx-arm64 \
