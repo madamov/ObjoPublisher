@@ -428,13 +428,14 @@ jobs:
           mkdir -p "$OUTPUT_DIRECTORY"
           echo $OUTPUT_DIRECTORY
       
-#          "$OBJO_BIN" publish "$SOLUTION_FILE" \
-#            --rid osx-arm64 \
-#            --rid osx-x64 \
-#            --output "$OUTPUT_DIRECTORY"
+          #          "$OBJO_BIN" publish "$SOLUTION_FILE" \
+          #            --rid osx-arm64 \
+          #            --rid osx-x64 \
+          #            --output "$OUTPUT_DIRECTORY"
 
-           # Build the publish command
-           cmd=(
+          # Build the publish command
+          
+          cmd=(
              "$OBJO_BIN"
              publish
              "$SOLUTION_FILE"
@@ -456,7 +457,7 @@ jobs:
            
            echo "Running:"
            printf ' %q' "${cmd[@]}"
-           echo
+            echo
            
            "${cmd[@]}"
 
