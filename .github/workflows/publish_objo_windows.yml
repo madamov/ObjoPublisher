@@ -378,6 +378,20 @@ jobs:
               $env:SOLUTION_FILE
             )
 
+           $correlationId = $env:AZURE_CORRELATION_ID
+           
+           if ([string]::IsNullOrWhiteSpace($correlationId)) {
+               $correlationId = "$($env:APPLICATION_NAME)-$($env:GITHUB_RUN_ID)"
+           }
+           
+           "AZURE_CORRELATION_ID=$correlationId" |
+               Out-File `
+                   -FilePath $env:GITHUB_ENV `
+                   -Append `
+                   -Encoding utf8
+           
+           Write-Host "Azure correlation ID: $correlationId"
+
             $targetCount = 0
 
             foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
@@ -421,6 +435,7 @@ jobs:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
           azure-client-id: ${{ secrets.azure-client-id }}
           azure-client-secret: ${{ secrets.azure-client-secret }}
+          azure-corelation-id: ${{ env.AZURE_CORRELATION_ID }}
 
           endpoint: ${{ secrets.azure-endpoint }}
           trusted-signing-account-name: ${{ secrets.azure-account-name }}
@@ -442,6 +457,7 @@ jobs:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
           azure-client-id: ${{ secrets.azure-client-id }}
           azure-client-secret: ${{ secrets.azure-client-secret }}
+          azure-corelation-id: ${{ env.AZURE_CORRELATION_ID }}
 
           endpoint: ${{ secrets.azure-endpoint }}
           trusted-signing-account-name: ${{ secrets.azure-account-name }}
