@@ -834,7 +834,7 @@ Instead, it:
 - lets Objo invoke `signtool.exe`,
 - and produces already signed MSIX packages.
 
-This workflow is useful when you prefer Objo Studio to manage the complete Windows publishing and signing process.
+This workflow is useful when you prefer Objo Studio to manage both publishing and signing.
 
 ---
 
@@ -885,13 +885,12 @@ Upload artifacts
 |--------|:-------:|---------|-------------|
 | `solution-file` | ✔ | | Path to the Objo solution file. |
 | `project-file` | ✔ | | Path to `project.json`. |
-| `application-name` | ✔ | | Application name used when generating artifact names and the default Azure correlation ID. |
+| `application-name` | ✔ | | Application name used when generating the default Azure correlation ID and naming artifacts. |
 | `output-directory` | | `Publish` | Output directory under the current Windows user's home directory. |
 | `targets` | | `win-x64` | Comma-separated list of Windows runtime identifiers. |
 | `artifact-name` | | `objo-windows-signed-publish` | Uploaded artifact name. |
 | `objo-version` | | latest | Specific Objo Studio version to use. |
-| `azure-correlation-id` | | generated | Optional Azure correlation ID. |
-| `azure-timestamp-url` | | empty | Optional RFC 3161 timestamp server URL written into `project.json`. |
+| `azure-correlation-id` | | generated | Optional Azure correlation ID. When omitted, the workflow generates one automatically. |
 
 ---
 
@@ -900,31 +899,37 @@ Upload artifacts
 | Secret | Required | Description |
 |---------|:-------:|-------------|
 | `objo-license` | ✔ | Objo Studio license key. |
-| `azure-tenant-id` | ✔ | Microsoft Entra tenant ID used by Azure authentication. |
-| `azure-client-id` | ✔ | Azure application (client) ID. |
-| `azure-client-secret` | ✔ | Azure application client secret. |
-| `azure-endpoint` | ✔ | Azure Trusted Signing endpoint. |
+| `azure-endpoint` | ✔ | Azure Trusted Signing endpoint, for example `https://wus2.codesigning.azure.net/`. |
 | `azure-account-name` | ✔ | Azure Trusted Signing account name. |
 | `azure-certificate-profile-name` | ✔ | Azure Trusted Signing certificate profile name. |
-| `azure-package-publisher` | ✔ | Publisher written into the MSIX manifest. |
+| `azure-package-publisher` | ✔ | Publisher value written into the MSIX manifest. It must match the publisher configured in the Azure certificate profile. |
+| `azure-timestamp-url` | | Optional RFC 3161 timestamp server URL. When omitted, Objo signs without timestamping. |
+
+---
+
+## Azure authentication
+
+This workflow **does not require** Azure authentication credentials such as:
+
+- Azure Tenant ID
+- Azure Client ID
+- Azure Client Secret
+
+Objo Studio performs Azure Trusted Signing using Microsoft's Azure Artifact Signing Client Tools and the authentication mechanisms supported by those tools on the runner.
 
 ---
 
 ## Azure Artifact Signing Client Tools
 
-Before publishing begins, the workflow installs Microsoft's Azure Artifact Signing Client Tools using:
+Before publishing begins, the workflow installs Microsoft's **Azure Artifact Signing Client Tools** using `winget`.
 
-```text
-winget
-```
-
-After installation it automatically searches several known installation locations to locate
+After installation, it automatically searches several known installation locations to locate:
 
 ```text
 Azure.CodeSigning.Dlib.dll
 ```
 
-The discovered DLL path is exported as
+The discovered DLL path is exported as:
 
 ```text
 AZURE_CODESIGNING_DLIB
@@ -936,18 +941,18 @@ allowing Objo Studio to invoke Azure Trusted Signing through Microsoft's signing
 
 ## Windows signing configuration
 
-Unlike the external-signing workflow, this workflow writes the complete Azure signing configuration into `project.json`.
+Before publishing, the workflow writes the Azure signing configuration into `project.json`.
 
-The following values are populated:
+The following values are configured:
 
-- Azure endpoint
-- Trusted Signing account
-- Certificate profile
-- Correlation ID
+- Azure Endpoint
+- Azure Account Name
+- Azure Certificate Profile Name
+- Azure Correlation ID
 - Timestamp URL
-- Package publisher
+- Package Publisher
 
-Because these values are present, Objo Studio automatically performs signing while publishing.
+Because these values are present, Objo Studio automatically signs every generated MSIX package during publishing.
 
 ---
 
@@ -961,7 +966,7 @@ Typical runtime identifiers include:
 | `win-arm64` | ARM64 Windows |
 | `win-x86` | 32-bit Windows |
 
-Example:
+Examples:
 
 ```yaml
 with:
@@ -975,23 +980,25 @@ with:
   targets: "win-x64, win-arm64"
 ```
 
+Whitespace surrounding target names is ignored automatically.
+
 ---
 
 ## Correlation ID
 
-When omitted, the workflow automatically generates a correlation ID similar to
+The correlation ID is optional.
 
-```text
-MyGreatApp-1234567890-1
-```
-
-using
+When not supplied, the workflow automatically generates one using:
 
 - application name
 - GitHub run ID
 - GitHub run attempt
 
-A custom value may also be supplied.
+Example:
+
+```text
+MyGreatApp-1234567890-1
+```
 
 ---
 
@@ -999,15 +1006,9 @@ A custom value may also be supplied.
 
 Timestamping is optional.
 
-When
+If `azure-timestamp-url` is supplied, it is written into `project.json` and Objo requests timestamping while signing.
 
-```yaml
-azure-timestamp-url
-```
-
-is supplied, it is written into `project.json`.
-
-When omitted, the timestamp field remains empty and Objo signs without timestamping.
+If omitted, the timestamp field is left empty and Objo signs without timestamping.
 
 ---
 
@@ -1019,7 +1020,7 @@ Default output directory:
 %USERPROFILE%\Publish
 ```
 
-Typical GitHub runner path:
+Typical GitHub-hosted runner location:
 
 ```text
 C:\Users\runneradmin\Publish
@@ -1042,29 +1043,24 @@ C:\Users\runneradmin\Documents\Releases
 
 ## Generated artifacts
 
-After publishing completes, the workflow searches recursively for all generated MSIX packages.
+After publishing completes, the workflow searches recursively for every generated `.msix` package.
 
-Each package is copied into
+The packages are copied into:
 
 ```text
 artifacts
 ```
 
-and uploaded using
+and uploaded using `actions/upload-artifact`.
 
-```text
-actions/upload-artifact
-```
-
-Typical uploaded files:
+Typical uploaded artifacts:
 
 ```text
 com.objo.app.mygreatapp_1.1.0.0_x64.msix
-
 com.objo.app.mygreatapp_1.1.0.0_arm64.msix
 ```
 
-Duplicate filenames are automatically renamed to avoid overwriting.
+Duplicate filenames are renamed automatically to avoid overwriting.
 
 ---
 
@@ -1078,7 +1074,6 @@ on:
 
 jobs:
   publish:
-
     uses: madamov/ObjoPublisher/.github/workflows/publish_objo_windows_objosign.yml@main
 
     with:
@@ -1095,19 +1090,17 @@ jobs:
       # Optional
       # objo-version: "26.7.1"
       # azure-correlation-id: "Release-42"
-      # azure-timestamp-url: "http://timestamp.acs.microsoft.com"
 
     secrets:
       objo-license: ${{ secrets.OBJO_LICENSE }}
-
-      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
-      azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
 
       azure-endpoint: ${{ secrets.AZURE_ENDPOINT }}
       azure-account-name: ${{ secrets.AZURE_ACCOUNTNAME }}
       azure-certificate-profile-name: ${{ secrets.AZURE_CERTIFICATEPROFILENAME }}
       azure-package-publisher: ${{ secrets.AZURE_PACKAGEPUBLISHER }}
+
+      # Optional
+      azure-timestamp-url: ${{ secrets.AZURE_TIMESTAMPURL }}
 ```
 
 ---
@@ -1120,6 +1113,7 @@ jobs:
 | MSIX signing | Azure Trusted Signing GitHub Action | Objo Studio |
 | Azure Artifact Signing Client Tools | Not required | Installed automatically |
 | `Azure.CodeSigning.Dlib.dll` | Not used | Located automatically |
+| Azure Tenant / Client credentials | Required | Not required |
 | `project.json` Azure settings | Cleared | Fully populated |
 | Uses `azure/trusted-signing-action` | ✔ | ✘ |
 | Objo invokes `signtool.exe` | ✘ | ✔ |
@@ -1129,7 +1123,7 @@ jobs:
 ## Notes
 
 - Objo Studio performs both publishing and signing.
-- The Microsoft Azure Artifact Signing Client Tools are installed automatically.
+- Microsoft's Azure Artifact Signing Client Tools are installed automatically.
 - The workflow automatically locates `Azure.CodeSigning.Dlib.dll`.
 - No additional signing step is required after publishing.
 - The Objo Studio license is always deactivated before the workflow finishes.
@@ -1137,4 +1131,3 @@ jobs:
 - Multiple Windows runtime identifiers are supported.
 - Timestamping is optional.
 
----
