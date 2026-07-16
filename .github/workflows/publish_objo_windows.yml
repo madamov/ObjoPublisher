@@ -429,7 +429,7 @@ jobs:
           }
 
       - name: Azure Trusted Signing (with timestamp)
-        if: ${{ secrets.azure-timestamp-url != '' }}
+        if: ${{ env.AZURE_TIMESTAMP_URL != '' }}
         uses: azure/trusted-signing-action@v0
         with:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
@@ -451,7 +451,7 @@ jobs:
           timestamp-digest: SHA256
           
       - name: Azure Trusted Signing
-        if: ${{ secrets.azure-timestamp-url == '' }}
+        if: ${{ env.AZURE_TIMESTAMP_URL == '' }}
         uses: azure/trusted-signing-action@v0
         with:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
