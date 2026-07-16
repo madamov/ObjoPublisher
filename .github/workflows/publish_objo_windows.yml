@@ -435,7 +435,7 @@ jobs:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
           azure-client-id: ${{ secrets.azure-client-id }}
           azure-client-secret: ${{ secrets.azure-client-secret }}
-          azure-corelation-id: ${{ env.AZURE_CORRELATION_ID }}
+          azure-correlation-id: ${{ env.AZURE_CORRELATION_ID }}
 
           endpoint: ${{ secrets.azure-endpoint }}
           trusted-signing-account-name: ${{ secrets.azure-account-name }}
@@ -457,7 +457,7 @@ jobs:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
           azure-client-id: ${{ secrets.azure-client-id }}
           azure-client-secret: ${{ secrets.azure-client-secret }}
-          azure-corelation-id: ${{ env.AZURE_CORRELATION_ID }}
+          azure-correlation-id: ${{ env.AZURE_CORRELATION_ID }}
 
           endpoint: ${{ secrets.azure-endpoint }}
           trusted-signing-account-name: ${{ secrets.azure-account-name }}
