@@ -1,0 +1,603 @@
+# This reusable workflow modifies project.json and leaves Objo
+# to publish and sign the generated Windows MSIX packages.
+
+name: Reusable Objo Windows Publish and Sign
+
+on:
+  workflow_call:
+    inputs:
+      solution-file:
+        description: Path to the Objo solution file
+        required: true
+        type: string
+
+      project-file:
+        description: Path to project.json
+        required: true
+        type: string
+
+      application-name:
+        description: Application name
+        required: true
+        type: string
+
+      output-directory:
+        description: Directory inside the current user's home directory
+        required: false
+        type: string
+        default: Publish
+
+      targets:
+        description: Windows targets to publish, comma separated
+        required: false
+        type: string
+        default: "win-x64"
+
+      artifact-name:
+        description: Uploaded artifact name
+        required: false
+        type: string
+        default: objo-windows-signed-publish
+
+      objo-version:
+        description: Objo Studio version; leave empty to detect latest
+        required: false
+        type: string
+        default: ""
+
+      azure-correlation-id:
+        description: Azure signing correlation ID; generated automatically when empty
+        required: false
+        type: string
+        default: ""
+
+    secrets:
+      objo-license:
+        required: true
+
+      azure-tenant-id:
+        required: true
+
+      azure-client-id:
+        required: true
+
+      azure-client-secret:
+        required: true
+
+      azure-endpoint:
+        required: true
+
+      azure-account-name:
+        required: true
+
+      azure-certificate-profile-name:
+        required: true
+
+      azure-package-publisher:
+        required: true
+
+      azure-timestamp-url:
+        required: false
+
+
+jobs:
+  publish-windows:
+    name: Publish and sign Windows application
+    runs-on: windows-latest
+
+    env:
+      SOLUTION_FILE: ${{ inputs.solution-file }}
+      PROJECT_FILE: ${{ inputs.project-file }}
+      APPLICATION_NAME: ${{ inputs.application-name }}
+
+      OBJO_LICENSE: ${{ secrets.objo-license }}
+
+      AZURE_TENANT_ID: ${{ secrets.azure-tenant-id }}
+      AZURE_CLIENT_ID: ${{ secrets.azure-client-id }}
+      AZURE_CLIENT_SECRET: ${{ secrets.azure-client-secret }}
+
+      AZURE_ENDPOINT: ${{ secrets.azure-endpoint }}
+      AZURE_ACCOUNT_NAME: ${{ secrets.azure-account-name }}
+      AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.azure-certificate-profile-name }}
+      AZURE_PACKAGE_PUBLISHER: ${{ secrets.azure-package-publisher }}
+
+      AZURE_CORRELATION_ID: ${{ inputs.azure-correlation-id }}
+      AZURE_TIMESTAMP_URL: ${{ secrets.azure-timestamp-url }}
+
+    steps:
+      - name: Check out application repository
+        uses: actions/checkout@v4
+
+      - name: Set output directory
+        shell: pwsh
+        env:
+          OUTPUT_FOLDER: ${{ inputs.output-directory }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:OUTPUT_FOLDER)) {
+            throw "Output directory input cannot be empty."
+          }
+
+          if ([System.IO.Path]::IsPathRooted($env:OUTPUT_FOLDER)) {
+            $outputDirectory = $env:OUTPUT_FOLDER
+          }
+          else {
+            $outputDirectory = Join-Path $HOME $env:OUTPUT_FOLDER
+          }
+
+          $outputDirectory = [System.IO.Path]::GetFullPath($outputDirectory)
+
+          "OUTPUT_DIRECTORY=$outputDirectory" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+          Write-Host "Output directory: $outputDirectory"
+
+      - name: Resolve Azure correlation ID
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $correlationId = $env:AZURE_CORRELATION_ID
+
+          if ([string]::IsNullOrWhiteSpace($correlationId)) {
+            $safeApplicationName = $env:APPLICATION_NAME -replace '[^A-Za-z0-9._-]', '-'
+            $correlationId = "$safeApplicationName-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          }
+
+          "AZURE_CORRELATION_ID=$correlationId" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+          Write-Host "Azure correlation ID: $correlationId"
+
+      - name: Validate workflow inputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (!(Test-Path -LiteralPath $env:SOLUTION_FILE -PathType Leaf)) {
+            throw "Objo solution file was not found: $env:SOLUTION_FILE"
+          }
+
+          if (!(Test-Path -LiteralPath $env:PROJECT_FILE -PathType Leaf)) {
+            throw "Objo project file was not found: $env:PROJECT_FILE"
+          }
+
+          try {
+            Get-Content `
+              -LiteralPath $env:PROJECT_FILE `
+              -Raw |
+              ConvertFrom-Json |
+              Out-Null
+          }
+          catch {
+            throw "Project file is not valid JSON: $env:PROJECT_FILE"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:APPLICATION_NAME)) {
+            throw "Application name cannot be empty."
+          }
+
+          $requiredAzureValues = @{
+            AZURE_TENANT_ID                = $env:AZURE_TENANT_ID
+            AZURE_CLIENT_ID                = $env:AZURE_CLIENT_ID
+            AZURE_CLIENT_SECRET            = $env:AZURE_CLIENT_SECRET
+            AZURE_ENDPOINT                 = $env:AZURE_ENDPOINT
+            AZURE_ACCOUNT_NAME             = $env:AZURE_ACCOUNT_NAME
+            AZURE_CERTIFICATE_PROFILE_NAME = $env:AZURE_CERTIFICATE_PROFILE_NAME
+            AZURE_PACKAGE_PUBLISHER        = $env:AZURE_PACKAGE_PUBLISHER
+          }
+
+          $missing = @(
+            foreach ($item in $requiredAzureValues.GetEnumerator()) {
+              if ([string]::IsNullOrWhiteSpace([string]$item.Value)) {
+                $item.Key
+              }
+            }
+          )
+
+          if ($missing.Count -gt 0) {
+            throw "Required Azure values are missing: $($missing -join ', ')"
+          }
+
+      - name: Determine Objo Studio version
+        id: version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.objo-version }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            VERSION="$REQUESTED_VERSION"
+          else
+            VERSION="$(
+              curl -fsSL https://objo.dev/download |
+                grep -oE \
+                  'Latest version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' |
+                head -n 1 |
+                sed -E 's/Latest version:[[:space:]]*//'
+            )"
+          fi
+
+          if [[ -z "$VERSION" ]]; then
+            echo "Could not determine the Objo Studio version." >&2
+            exit 1
+          fi
+
+          echo "Using Objo Studio version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Objo Studio cache
+        id: cache-objo
+        uses: actions/cache@v4
+        with:
+          path: C:\Objo
+          key: objo-studio-windows-${{ steps.version.outputs.version }}
+
+      - name: Download and extract Objo Studio portable
+        if: steps.cache-objo.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $archiveName = "Objo-Studio-$env:VERSION-win-x64-portable.zip"
+          $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
+          $url = "https://downloads.objo.dev/releases/$env:VERSION/$archiveName"
+
+          Write-Host "Downloading Objo Studio:"
+          Write-Host $url
+
+          Remove-Item `
+            -LiteralPath "C:\Objo" `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "C:\Objo" |
+            Out-Null
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $archivePath
+
+          Expand-Archive `
+            -LiteralPath $archivePath `
+            -DestinationPath "C:\Objo" `
+            -Force
+
+      - name: Find Objo executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $objo = Get-ChildItem `
+            -Path "C:\Objo" `
+            -Recurse `
+            -Filter "objo.exe" `
+            -File |
+            Select-Object -First 1
+
+          if ($null -eq $objo) {
+            throw "Could not find objo.exe under C:\Objo."
+          }
+
+          "OBJO_BIN=$($objo.FullName)" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+          Write-Host "Found Objo executable:"
+          Write-Host $objo.FullName
+
+      - name: Install Azure Artifact Signing Client Tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          winget install `
+            --exact `
+            --id Microsoft.Azure.ArtifactSigningClientTools `
+            --accept-package-agreements `
+            --accept-source-agreements `
+            --silent `
+            --disable-interactivity
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Artifact Signing Client Tools installation failed with exit code $LASTEXITCODE."
+          }
+
+          $searchRoots = @(
+            "C:\ProgramData\Microsoft"
+            "$env:LOCALAPPDATA\Microsoft"
+            "$env:ProgramFiles\Microsoft"
+            "${env:ProgramFiles(x86)}\Microsoft"
+          ) |
+            Where-Object {
+              $_ -and (Test-Path -LiteralPath $_)
+            }
+
+          Write-Host "Searching for Azure.CodeSigning.Dlib.dll..."
+
+          $dlibCandidates = @(
+            foreach ($root in $searchRoots) {
+              Get-ChildItem `
+                -LiteralPath $root `
+                -Filter "Azure.CodeSigning.Dlib.dll" `
+                -File `
+                -Recurse `
+                -ErrorAction SilentlyContinue
+            }
+          )
+
+          $dlib = $dlibCandidates |
+            Sort-Object `
+              @{
+                Expression = {
+                  if ($_.FullName -match '[\\/]x64[\\/]') {
+                    0
+                  }
+                  else {
+                    1
+                  }
+                }
+              },
+              FullName |
+            Select-Object -First 1
+
+          if ($null -eq $dlib) {
+            Write-Host "Artifact Signing related directories:"
+
+            foreach ($root in $searchRoots) {
+              Get-ChildItem `
+                -LiteralPath $root `
+                -Directory `
+                -Recurse `
+                -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.FullName -match 'ArtifactSigning|TrustedSigning'
+                } |
+                Select-Object -ExpandProperty FullName |
+                Write-Host
+            }
+
+            throw "Azure.CodeSigning.Dlib.dll was not found after installation."
+          }
+
+          Write-Host "Found Artifact Signing DLIB:"
+          Write-Host $dlib.FullName
+
+          "AZURE_CODESIGNING_DLIB=$($dlib.FullName)" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+      - name: Configure Windows signing in project.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TMP_FILE="$(mktemp)"
+
+          if [[ ! -f "$PROJECT_FILE" ]]; then
+            echo "Could not find project file: $PROJECT_FILE" >&2
+            exit 1
+          fi
+
+          jq \
+            --arg endpoint "$AZURE_ENDPOINT" \
+            --arg account "$AZURE_ACCOUNT_NAME" \
+            --arg profile "$AZURE_CERTIFICATE_PROFILE_NAME" \
+            --arg correlation "$AZURE_CORRELATION_ID" \
+            --arg timestamp "$AZURE_TIMESTAMP_URL" \
+            --arg publisher "$AZURE_PACKAGE_PUBLISHER" \
+            '
+              .Metadata.Signing.Windows.AzureEndpoint = $endpoint |
+              .Metadata.Signing.Windows.AzureAccountName = $account |
+              .Metadata.Signing.Windows.AzureCertificateProfileName = $profile |
+              .Metadata.Signing.Windows.AzureCorrelationId = $correlation |
+              .Metadata.Signing.Windows.TimestampUrl = $timestamp |
+              .Metadata.Signing.Windows.PackagePublisher = $publisher
+            ' \
+            "$PROJECT_FILE" > "$TMP_FILE"
+
+          mv "$TMP_FILE" "$PROJECT_FILE"
+
+          echo "Updated Windows signing section:"
+          jq '.Metadata.Signing.Windows' "$PROJECT_FILE"
+
+      - name: Activate Objo license and publish Windows application
+        shell: pwsh
+        env:
+          PUBLISH_TARGETS: ${{ inputs.targets }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $licenseFile = Join-Path `
+            $env:RUNNER_TEMP `
+            "objo-license-key.txt"
+
+          $publishExitCode = 1
+          $licenseActivated = $false
+
+          try {
+            Set-Content `
+              -LiteralPath $licenseFile `
+              -Value $env:OBJO_LICENSE `
+              -NoNewline `
+              -Encoding utf8
+
+            & $env:OBJO_BIN license activate `
+              --key-file $licenseFile
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "License activation failed with exit code $LASTEXITCODE."
+            }
+
+            $licenseActivated = $true
+
+            New-Item `
+              -ItemType Directory `
+              -Path $env:OUTPUT_DIRECTORY `
+              -Force |
+              Out-Null
+
+            $arguments = @(
+              "publish"
+              $env:SOLUTION_FILE
+            )
+
+            $targetCount = 0
+
+            foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
+              $target = $targetValue.Trim()
+
+              if ([string]::IsNullOrWhiteSpace($target)) {
+                continue
+              }
+
+              Write-Host "Adding publish target: $target"
+
+              $arguments += "--rid"
+              $arguments += $target
+              $targetCount++
+            }
+
+            if ($targetCount -eq 0) {
+              throw "No valid Windows publish targets were provided."
+            }
+
+            $arguments += "--output"
+            $arguments += $env:OUTPUT_DIRECTORY
+
+            Write-Host "Publishing and signing Windows application:"
+            Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
+
+            & $env:OBJO_BIN @arguments
+
+            $publishExitCode = $LASTEXITCODE
+
+            Write-Host "Objo publish exit code: $publishExitCode"
+
+            if ($publishExitCode -ne 0) {
+              throw "Objo publish failed with exit code $publishExitCode."
+            }
+          }
+          finally {
+            if ($licenseActivated) {
+              Write-Host "Deactivating Objo license..."
+
+              try {
+                & $env:OBJO_BIN license deactivate
+
+                Write-Host "Objo license deactivate exit code: $LASTEXITCODE"
+              }
+              catch {
+                Write-Warning "Objo license deactivation failed: $($_.Exception.Message)"
+              }
+            }
+
+            Remove-Item `
+              -LiteralPath $licenseFile `
+              -Force `
+              -ErrorAction SilentlyContinue
+
+            if (Test-Path -LiteralPath $env:OUTPUT_DIRECTORY) {
+              Write-Host "Output directory contents:"
+
+              Get-ChildItem `
+                -LiteralPath $env:OUTPUT_DIRECTORY `
+                -Recurse `
+                -Force `
+                -ErrorAction SilentlyContinue |
+                Select-Object FullName, Length |
+                Format-Table -AutoSize
+            }
+          }
+
+      - name: Collect signed Windows packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $artifactDirectory = Join-Path `
+            $env:OUTPUT_DIRECTORY `
+            "artifacts"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $artifactDirectory `
+            -Force |
+            Out-Null
+
+          $packages = @(
+            Get-ChildItem `
+              -LiteralPath $env:OUTPUT_DIRECTORY `
+              -Recurse `
+              -Filter "*.msix" `
+              -File |
+              Where-Object {
+                $_.DirectoryName -ne $artifactDirectory
+              }
+          )
+
+          if ($packages.Count -eq 0) {
+            throw "No signed MSIX packages were found."
+          }
+
+          $packageCount = 0
+
+          foreach ($package in $packages) {
+            $destination = Join-Path `
+              $artifactDirectory `
+              $package.Name
+
+            if (Test-Path -LiteralPath $destination) {
+              $parentFolder = Split-Path `
+                $package.DirectoryName `
+                -Leaf
+
+              $destination = Join-Path `
+                $artifactDirectory `
+                "$($env:APPLICATION_NAME)-$parentFolder-$($package.Name)"
+            }
+
+            Copy-Item `
+              -LiteralPath $package.FullName `
+              -Destination $destination `
+              -Force
+
+            Write-Host "Collected:"
+            Write-Host "  Source:      $($package.FullName)"
+            Write-Host "  Destination: $destination"
+
+            $packageCount++
+          }
+
+          Write-Host ""
+          Write-Host "Prepared $packageCount signed Windows package(s):"
+
+          Get-ChildItem `
+            -LiteralPath $artifactDirectory `
+            -File |
+            Format-Table Name, Length -AutoSize
+
+      - name: Upload signed Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ env.OUTPUT_DIRECTORY }}\artifacts\*.msix
+          if-no-files-found: error
