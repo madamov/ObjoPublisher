@@ -51,35 +51,25 @@ on:
         type: string
         default: ""
 
-    secrets:
-      objo-license:
-        required: true
+secrets:
+  objo-license:
+    required: true
 
-      azure-tenant-id:
-        required: true
+  azure-endpoint:
+    required: true
 
-      azure-client-id:
-        required: true
+  azure-account-name:
+    required: true
 
-      azure-client-secret:
-        required: true
+  azure-certificate-profile-name:
+    required: true
 
-      azure-endpoint:
-        required: true
+  azure-package-publisher:
+    required: true
 
-      azure-account-name:
-        required: true
-
-      azure-certificate-profile-name:
-        required: true
-
-      azure-package-publisher:
-        required: true
-
-      azure-timestamp-url:
-        required: false
-
-
+  azure-timestamp-url:
+    required: false
+    
 jobs:
   publish-windows:
     name: Publish and sign Windows application
@@ -92,18 +82,15 @@ jobs:
 
       OBJO_LICENSE: ${{ secrets.objo-license }}
 
-      AZURE_TENANT_ID: ${{ secrets.azure-tenant-id }}
-      AZURE_CLIENT_ID: ${{ secrets.azure-client-id }}
-      AZURE_CLIENT_SECRET: ${{ secrets.azure-client-secret }}
+env:
+  AZURE_ENDPOINT: ${{ secrets.azure-endpoint }}
+  AZURE_ACCOUNT_NAME: ${{ secrets.azure-account-name }}
+  AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.azure-certificate-profile-name }}
+  AZURE_PACKAGE_PUBLISHER: ${{ secrets.azure-package-publisher }}
 
-      AZURE_ENDPOINT: ${{ secrets.azure-endpoint }}
-      AZURE_ACCOUNT_NAME: ${{ secrets.azure-account-name }}
-      AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.azure-certificate-profile-name }}
-      AZURE_PACKAGE_PUBLISHER: ${{ secrets.azure-package-publisher }}
-
-      AZURE_CORRELATION_ID: ${{ inputs.azure-correlation-id }}
-      AZURE_TIMESTAMP_URL: ${{ secrets.azure-timestamp-url }}
-
+  AZURE_TIMESTAMP_URL: ${{ secrets.azure-timestamp-url }}
+  AZURE_CORRELATION_ID: ${{ inputs.azure-correlation-id }}
+  
     steps:
       - name: Check out application repository
         uses: actions/checkout@v4
@@ -184,15 +171,12 @@ jobs:
             throw "Application name cannot be empty."
           }
 
-          $requiredAzureValues = @{
-            AZURE_TENANT_ID                = $env:AZURE_TENANT_ID
-            AZURE_CLIENT_ID                = $env:AZURE_CLIENT_ID
-            AZURE_CLIENT_SECRET            = $env:AZURE_CLIENT_SECRET
-            AZURE_ENDPOINT                 = $env:AZURE_ENDPOINT
-            AZURE_ACCOUNT_NAME             = $env:AZURE_ACCOUNT_NAME
-            AZURE_CERTIFICATE_PROFILE_NAME = $env:AZURE_CERTIFICATE_PROFILE_NAME
-            AZURE_PACKAGE_PUBLISHER        = $env:AZURE_PACKAGE_PUBLISHER
-          }
+           $requiredAzureValues = @{
+             AZURE_ENDPOINT                 = $env:AZURE_ENDPOINT
+             AZURE_ACCOUNT_NAME             = $env:AZURE_ACCOUNT_NAME
+             AZURE_CERTIFICATE_PROFILE_NAME = $env:AZURE_CERTIFICATE_PROFILE_NAME
+             AZURE_PACKAGE_PUBLISHER        = $env:AZURE_PACKAGE_PUBLISHER
+           }
 
           $missing = @(
             foreach ($item in $requiredAzureValues.GetEnumerator()) {
