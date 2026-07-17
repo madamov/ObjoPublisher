@@ -430,7 +430,7 @@ jobs:
 
       - name: Azure Trusted Signing (with timestamp)
         if: ${{ env.AZURE_TIMESTAMP_URL != '' }}
-        uses: azure/trusted-signing-action@v0
+        uses: azure/trusted-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
           azure-client-id: ${{ secrets.azure-client-id }}
