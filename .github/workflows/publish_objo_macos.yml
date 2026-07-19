@@ -285,28 +285,35 @@ jobs:
         run: |
           set -euo pipefail
 
-          JSON_URL="https://objo.dev/releases/stable.json"
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            VERSION="$REQUESTED_VERSION"
+          else
+                JSON_URL="https://objo.dev/releases/stable.json"
+            
+                curl -fsSL "$JSON_URL" -o stable.json
+            
+                DOWNLOAD_URL="$(jq -r '.downloads.macos.variant_items[0].url' stable.json)"      
       
-          curl -fsSL "$JSON_URL" -o stable.json
-      
-          VERSION="$(jq -r '.version' stable.json)"
-          DOWNLOAD_URL="$(jq -r '.downloads.macos.variant_items[0].url' stable.json)"      
+                if [[ -z "$VERSION" || "$VERSION" == "null" ]]; then
+                  echo "Failed to determine latest version."
+                  exit 1
+                fi
+            
+                if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
+                  echo "Failed to determine Linux download URL."
+                  exit 1
+                fi
+                
+                echo "download_url=$DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
+                
+                echo "Latest version: $VERSION"
+                echo "Download URL: $DOWNLOAD_URL"
+          
+          fi
 
-          if [[ -z "$VERSION" || "$VERSION" == "null" ]]; then
-            echo "Failed to determine latest version."
-            exit 1
-          fi
-      
-          if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
-            echo "Failed to determine Linux download URL."
-            exit 1
-          fi
-      
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "download_url=$DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
       
-          echo "Latest version: $VERSION"
-          echo "Download URL: $DOWNLOAD_URL"
+
 
       - name: Restore Objo Studio cache
         id: cache-objo
