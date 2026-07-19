@@ -90,7 +90,7 @@ jobs:
       APPLICATION_NAME: ${{ inputs.application-name }}
 
     steps:
-      # This checks out the repository that called this reusable workflow.
+
       - name: Check out application repository
         uses: actions/checkout@v4
 
@@ -285,25 +285,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -n "$REQUESTED_VERSION" ]]; then
-            VERSION="$REQUESTED_VERSION"
-          else
-            VERSION="$(
-              curl -fsSL https://objo.dev/download |
-              grep -oE \
-                'Latest version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' |
-              head -n 1 |
-              sed -E 's/Latest version:[[:space:]]*//'
-            )"
-          fi
+          JSON_URL="https://objo.dev/releases/stable.json"
+      
+          curl -fsSL "$JSON_URL" -o stable.json
+      
+          VERSION="$(jq -r '.version' stable.json)"
+          DOWNLOAD_URL="$(jq -r '.downloads.macos.variant_items[0].url' stable.json)"      
 
-          if [[ -z "$VERSION" ]]; then
-            echo "Could not determine the Objo Studio version." >&2
+          if [[ -z "$VERSION" || "$VERSION" == "null" ]]; then
+            echo "Failed to determine latest version."
             exit 1
           fi
-
-          echo "Using Objo Studio version: $VERSION"
+      
+          if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
+            echo "Failed to determine Linux download URL."
+            exit 1
+          fi
+      
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "download_url=$DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
+      
+          echo "Latest version: $VERSION"
+          echo "Download URL: $DOWNLOAD_URL"
 
       - name: Restore Objo Studio cache
         id: cache-objo
@@ -320,9 +323,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          DMG="$RUNNER_TEMP/Objo-Studio-${VERSION}-macOS-arm64.dmg"
-          URL="https://downloads.objo.dev/releases/${VERSION}/Objo-Studio-${VERSION}-macOS-arm64.dmg"
           MOUNT_POINT=""
+
+          VERSION="${{ steps.version.outputs.version }}"
+          URL="${{ steps.version.outputs.download_url }}"
+          DMG="$RUNNER_TEMP/$(basename "$URL")"
 
           cleanup_mount() {
             if [[ -n "$MOUNT_POINT" ]] &&
