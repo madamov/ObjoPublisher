@@ -116,25 +116,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -n "$REQUESTED_VERSION" ]]; then
-            VERSION="$REQUESTED_VERSION"
-          else
-            VERSION="$(
-              curl -fsSL https://objo.dev/download |
-                grep -oE \
-                  'Latest version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' |
-                head -n 1 |
-                sed -E 's/Latest version:[[:space:]]*//'
-            )"
-          fi
-
-          if [[ -z "$VERSION" ]]; then
-            echo "Could not determine the Objo Studio version." >&2
+          JSON_URL="https://objo.dev/releases/stable.json"
+      
+          curl -fsSL "$JSON_URL" -o stable.json
+      
+          VERSION="$(jq -r '.version' stable.json)"
+          DOWNLOAD_URL="$(jq -r '.downloads.linux.url' stable.json)"
+      
+          if [[ -z "$VERSION" || "$VERSION" == "null" ]]; then
+            echo "Failed to determine latest version."
             exit 1
           fi
-
-          echo "Using Objo Studio version: $VERSION"
+      
+          if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
+            echo "Failed to determine Linux download URL."
+            exit 1
+          fi
+      
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "download_url=$DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
+          echo "Using Objo Studio version: $VERSION"
 
       - name: Restore Objo Studio cache
         id: cache-objo
@@ -151,8 +152,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          ARCHIVE="$RUNNER_TEMP/Objo-Studio-${VERSION}-linux-x64.tar.gz"
-          URL="https://downloads.objo.dev/releases/${VERSION}/Objo-Studio-${VERSION}-linux-x64.tar.gz"
+          VERSION="${{ steps.version.outputs.version }}"
+          URL=${{ steps.latest.outputs.download_url }}
+          ARCHIVE="$(basename "$URL")"
 
           sudo rm -rf /opt/objo-studio
           sudo mkdir -p /opt/objo-studio
