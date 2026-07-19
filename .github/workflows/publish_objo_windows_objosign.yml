@@ -51,25 +51,25 @@ on:
         type: string
         default: ""
 
-secrets:
-  objo-license:
-    required: true
-
-  azure-endpoint:
-    required: true
-
-  azure-account-name:
-    required: true
-
-  azure-certificate-profile-name:
-    required: true
-
-  azure-package-publisher:
-    required: true
-
-  azure-timestamp-url:
-    required: false
+    secrets:
+      objo-license:
+        required: true
     
+      azure-endpoint:
+        required: true
+    
+      azure-account-name:
+        required: true
+    
+      azure-certificate-profile-name:
+        required: true
+    
+      azure-package-publisher:
+        required: true
+    
+      azure-timestamp-url:
+        required: false
+        
 jobs:
   publish-windows:
     name: Publish and sign Windows application
