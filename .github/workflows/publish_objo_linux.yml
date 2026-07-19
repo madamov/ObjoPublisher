@@ -154,7 +154,7 @@ jobs:
 
           VERSION="${{ steps.version.outputs.version }}"
           URL=${{ steps.latest.outputs.download_url }}
-          ARCHIVE="$(basename "$URL")"
+          ARCHIVE="$RUNNER_TEMP/$(basename "$URL")"
 
           sudo rm -rf /opt/objo-studio
           sudo mkdir -p /opt/objo-studio
