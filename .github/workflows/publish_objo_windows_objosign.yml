@@ -81,16 +81,14 @@ jobs:
       APPLICATION_NAME: ${{ inputs.application-name }}
 
       OBJO_LICENSE: ${{ secrets.objo-license }}
-
-env:
-  AZURE_ENDPOINT: ${{ secrets.azure-endpoint }}
-  AZURE_ACCOUNT_NAME: ${{ secrets.azure-account-name }}
-  AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.azure-certificate-profile-name }}
-  AZURE_PACKAGE_PUBLISHER: ${{ secrets.azure-package-publisher }}
-
-  AZURE_TIMESTAMP_URL: ${{ secrets.azure-timestamp-url }}
-  AZURE_CORRELATION_ID: ${{ inputs.azure-correlation-id }}
+      AZURE_ENDPOINT: ${{ secrets.azure-endpoint }}
+      AZURE_ACCOUNT_NAME: ${{ secrets.azure-account-name }}
+      AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.azure-certificate-profile-name }}
+      AZURE_PACKAGE_PUBLISHER: ${{ secrets.azure-package-publisher }}
   
+      AZURE_TIMESTAMP_URL: ${{ secrets.azure-timestamp-url }}
+      AZURE_CORRELATION_ID: ${{ inputs.azure-correlation-id }}
+
     steps:
       - name: Check out application repository
         uses: actions/checkout@v4
