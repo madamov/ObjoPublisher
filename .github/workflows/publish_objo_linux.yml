@@ -153,9 +153,11 @@ jobs:
           set -euo pipefail
 
           VERSION="${{ steps.version.outputs.version }}"
-          URL=${{ steps.latest.outputs.download_url }}
+          URL=${{ steps.version.outputs.download_url }}
           ARCHIVE="$RUNNER_TEMP/$(basename "$URL")"
 
+          echo $ARCHIVE
+          
           sudo rm -rf /opt/objo-studio
           sudo mkdir -p /opt/objo-studio
           sudo chown "$USER":"$(id -gn)" /opt/objo-studio
