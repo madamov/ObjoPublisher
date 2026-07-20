@@ -196,25 +196,51 @@ jobs:
         run: |
           set -euo pipefail
 
+          JSON_URL="https://objo.dev/releases/stable.json"
+          RELEASE_JSON="$RUNNER_TEMP/objo-stable.json"
+
+          curl -fsSL "$JSON_URL" -o "$RELEASE_JSON"
+
+          STABLE_VERSION="$(jq -er '.version' "$RELEASE_JSON")"
+          STABLE_BASE_URL="$(jq -er '.downloads_base_url' "$RELEASE_JSON")"
+          STABLE_DOWNLOAD_URL="$(
+            jq -er '
+              .downloads.windows.variant_items[]
+              | select(.platform=="win-x64-portable")
+              | .url
+            ' "$RELEASE_JSON"
+          )"
+
           if [[ -n "$REQUESTED_VERSION" ]]; then
             VERSION="$REQUESTED_VERSION"
-          else
-            VERSION="$(
-              curl -fsSL https://objo.dev/download |
-                grep -oE \
-                  'Latest version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' |
-                head -n 1 |
-                sed -E 's/Latest version:[[:space:]]*//'
+
+            DOWNLOADS_BASE_URL="$(
+              printf '%s' "$STABLE_BASE_URL" |
+                sed "s#/${STABLE_VERSION}\$#/${VERSION}#"
             )"
+
+            DOWNLOAD_URL="$(
+              printf '%s' "$STABLE_DOWNLOAD_URL" |
+                sed "s#${STABLE_VERSION}#${VERSION}#g"
+            )"
+
+            echo "Using requested Objo Studio version: $VERSION"
+          else
+            VERSION="$STABLE_VERSION"
+            DOWNLOADS_BASE_URL="$STABLE_BASE_URL"
+            DOWNLOAD_URL="$STABLE_DOWNLOAD_URL"
+
+            echo "Using latest Objo Studio version: $VERSION"
           fi
 
-          if [[ -z "$VERSION" ]]; then
-            echo "Could not determine the Objo Studio version." >&2
-            exit 1
-          fi
+          {
+            echo "version=$VERSION"
+            echo "downloads_base_url=$DOWNLOADS_BASE_URL"
+            echo "download_url=$DOWNLOAD_URL"
+          } >> "$GITHUB_OUTPUT"
 
-          echo "Using Objo Studio version: $VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Downloads base URL: $DOWNLOADS_BASE_URL"
+          echo "Download URL: $DOWNLOAD_URL"
 
       - name: Restore Objo Studio cache
         id: cache-objo
@@ -223,40 +249,32 @@ jobs:
           path: C:\Objo
           key: objo-studio-windows-${{ steps.version.outputs.version }}
 
-      - name: Download and extract Objo Studio portable
+      - name: Download Objo Studio
         if: steps.cache-objo.outputs.cache-hit != 'true'
         shell: pwsh
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          URL: ${{ steps.version.outputs.download_url }}
         run: |
           $ErrorActionPreference = "Stop"
 
-          $archiveName = "Objo-Studio-$env:VERSION-win-x64-portable.zip"
-          $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
-          $url = "https://downloads.objo.dev/releases/$env:VERSION/$archiveName"
+          $zip = Join-Path $env:RUNNER_TEMP (Split-Path $env:URL -Leaf)
 
-          Write-Host "Downloading Objo Studio:"
-          Write-Host $url
+          Write-Host "Downloading $env:URL"
+          Write-Host "Archive: $zip"
+
+          Invoke-WebRequest `
+            -Uri $env:URL `
+            -OutFile $zip
 
           Remove-Item `
-            -LiteralPath "C:\Objo" `
+            C:\Objo `
             -Recurse `
             -Force `
             -ErrorAction SilentlyContinue
 
-          New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path "C:\Objo" |
-            Out-Null
-
-          Invoke-WebRequest `
-            -Uri $url `
-            -OutFile $archivePath
-
           Expand-Archive `
-            -LiteralPath $archivePath `
-            -DestinationPath "C:\Objo" `
+            -Path $zip `
+            -DestinationPath C:\Objo `
             -Force
 
       - name: Find Objo executable
