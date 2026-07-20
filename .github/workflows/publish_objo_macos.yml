@@ -448,53 +448,66 @@ jobs:
 
       - name: Publish macOS application
         shell: bash
+        env:
+          PUBLISH_TARGETS: ${{ inputs.targets }}
         run: |
           set -euo pipefail
-      
-          cleanup() {
-            echo "Deactivating Objo license..."
-            "$OBJO_BIN" license deactivate || true
-            echo "Output directory contents:"
-            ls -alR $OUTPUT_DIRECTORY
-          }
-      
-          trap cleanup EXIT
-      
-          mkdir -p "$OUTPUT_DIRECTORY"
-          echo $OUTPUT_DIRECTORY
-      
-          #          "$OBJO_BIN" publish "$SOLUTION_FILE" \
-          #            --rid osx-arm64 \
-          #            --rid osx-x64 \
-          #            --output "$OUTPUT_DIRECTORY"
 
-          # Build the publish command
-          
+          mkdir -p "$OUTPUT_DIRECTORY"
+          echo "Publishing to: $OUTPUT_DIRECTORY"
+
           cmd=(
-             "$OBJO_BIN"
-             publish
-             "$SOLUTION_FILE"
-           )
-           
-           # Split comma-separated targets, trim whitespace and add one --rid per target
-           IFS=',' read -ra TARGETS <<< "${{ inputs.targets }}"
-           
-           for target in "${TARGETS[@]}"; do
-             # Trim leading/trailing whitespace
-             target="$(echo "$target" | xargs)"
-           
-             [[ -z "$target" ]] && continue
-           
-             cmd+=(--rid "$target")
-           done
-           
-           cmd+=(--output "$OUTPUT_DIRECTORY")
-           
-           echo "Running:"
-           printf ' %q' "${cmd[@]}"
-            echo
-           
-           "${cmd[@]}"
+            "$OBJO_BIN"
+            publish
+            "$SOLUTION_FILE"
+          )
+
+          IFS=',' read -ra TARGET_LIST <<< "$PUBLISH_TARGETS"
+
+          target_count=0
+
+          for target in "${TARGET_LIST[@]}"; do
+            target="$(
+              printf '%s' "$target" |
+                sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
+            )"
+
+            [[ -z "$target" ]] && continue
+
+            echo "Adding publish target: $target"
+            cmd+=(--rid "$target")
+            ((target_count += 1))
+          done
+
+          if (( target_count == 0 )); then
+            echo "No valid macOS publish targets were provided." >&2
+            exit 1
+          fi
+
+          cmd+=(--output "$OUTPUT_DIRECTORY")
+
+          echo "Running command:"
+          printf ' %q' "${cmd[@]}"
+          echo
+
+          "${cmd[@]}"
+          
+      - name: Deactivate Objo license
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          echo "Deactivating Objo license..."
+          "$OBJO_BIN" license deactivate
+
+          if [[ -d "$OUTPUT_DIRECTORY" ]]; then
+            echo "Output directory contents:"
+            find "$OUTPUT_DIRECTORY" \
+              -maxdepth 4 \
+              -type f \
+              -print || true
+          fi
 
       - name: Collect macOS disk images
         shell: bash
