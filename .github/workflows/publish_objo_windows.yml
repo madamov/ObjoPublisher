@@ -370,96 +370,95 @@ jobs:
           PUBLISH_TARGETS: ${{ inputs.targets }}
         run: |
           $ErrorActionPreference = "Stop"
-
-          function Invoke-ObjoLicenseCleanup {
-            Write-Host "Deactivating Objo license..."
-
-            try {
-              & $env:OBJO_BIN license deactivate
-
-              if ($LASTEXITCODE -ne 0) {
-                Write-Warning "Objo license deactivation returned exit code $LASTEXITCODE."
-              }
+      
+          New-Item `
+            -ItemType Directory `
+            -Path $env:OUTPUT_DIRECTORY `
+            -Force |
+            Out-Null
+      
+          Write-Host "Publishing to: $env:OUTPUT_DIRECTORY"
+      
+          $arguments = @(
+            "publish"
+            $env:SOLUTION_FILE
+          )
+      
+          $correlationId = $env:AZURE_CORRELATION_ID
+      
+          if ([string]::IsNullOrWhiteSpace($correlationId)) {
+            $correlationId = "$($env:APPLICATION_NAME)-$($env:GITHUB_RUN_ID)"
+          }
+      
+          "AZURE_CORRELATION_ID=$correlationId" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+      
+          Write-Host "Azure correlation ID: $correlationId"
+      
+          $targetCount = 0
+      
+          foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
+            $target = $targetValue.Trim()
+      
+            if ([string]::IsNullOrWhiteSpace($target)) {
+              continue
             }
-            catch {
-              Write-Warning "Objo license cleanup failed: $($_.Exception.Message)"
-            }
-
-            if (Test-Path $env:OUTPUT_DIRECTORY) {
-              Write-Host "Output directory contents:"
-
-              Get-ChildItem `
-                -Path $env:OUTPUT_DIRECTORY `
-                -Recurse `
-                -Force `
-                -ErrorAction SilentlyContinue |
-              Select-Object FullName, Length |
-              Format-Table -AutoSize
-            }
+      
+            Write-Host "Adding publish target: $target"
+      
+            $arguments += "--rid"
+            $arguments += $target
+            $targetCount++
+          }
+      
+          if ($targetCount -eq 0) {
+            throw "No valid Windows publish targets were provided."
+          }
+      
+          $arguments += "--output"
+          $arguments += $env:OUTPUT_DIRECTORY
+      
+          Write-Host "Running:"
+          Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
+      
+          & $env:OBJO_BIN @arguments
+      
+          if ($LASTEXITCODE -ne 0) {
+            throw "Objo publish failed with exit code $LASTEXITCODE."
           }
 
+      - name: Deactivate Objo license
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+      
+          Write-Host "Deactivating Objo license..."
+      
           try {
-            New-Item `
-              -ItemType Directory `
-              -Path $env:OUTPUT_DIRECTORY `
-              -Force |
-              Out-Null
-
-            Write-Host "Publishing to: $env:OUTPUT_DIRECTORY"
-
-            $arguments = @(
-              "publish"
-              $env:SOLUTION_FILE
-            )
-
-           $correlationId = $env:AZURE_CORRELATION_ID
-           
-           if ([string]::IsNullOrWhiteSpace($correlationId)) {
-               $correlationId = "$($env:APPLICATION_NAME)-$($env:GITHUB_RUN_ID)"
-           }
-           
-           "AZURE_CORRELATION_ID=$correlationId" |
-               Out-File `
-                   -FilePath $env:GITHUB_ENV `
-                   -Append `
-                   -Encoding utf8
-           
-           Write-Host "Azure correlation ID: $correlationId"
-
-            $targetCount = 0
-
-            foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
-              $target = $targetValue.Trim()
-
-              if ([string]::IsNullOrWhiteSpace($target)) {
-                continue
-              }
-
-              Write-Host "Adding publish target: $target"
-
-              $arguments += "--rid"
-              $arguments += $target
-              $targetCount++
-            }
-
-            if ($targetCount -eq 0) {
-              throw "No valid Windows publish targets were provided."
-            }
-
-            $arguments += "--output"
-            $arguments += $env:OUTPUT_DIRECTORY
-
-            Write-Host "Running:"
-            Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
-
-            & $env:OBJO_BIN @arguments
-
+            & $env:OBJO_BIN license deactivate
+      
             if ($LASTEXITCODE -ne 0) {
-              throw "Objo publish failed with exit code $LASTEXITCODE."
+              Write-Warning "Objo license deactivation returned exit code $LASTEXITCODE."
             }
           }
-          finally {
-            Invoke-ObjoLicenseCleanup
+          catch {
+            Write-Warning "Objo license deactivation failed: $($_.Exception.Message)"
+          }
+      
+          if (Test-Path $env:OUTPUT_DIRECTORY) {
+            Write-Host "Output directory contents:"
+      
+            Get-ChildItem `
+              -Path $env:OUTPUT_DIRECTORY `
+              -Recurse `
+              -Force `
+              -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
           }
 
       - name: Azure Trusted Signing (with timestamp)
