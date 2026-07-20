@@ -115,27 +115,62 @@ jobs:
           REQUESTED_VERSION: ${{ inputs.objo-version }}
         run: |
           set -euo pipefail
-
-          if [[ -n "$REQUESTED_VERSION" ]]; then
-            VERSION="$REQUESTED_VERSION"
-          else
-            VERSION="$(
-              curl -fsSL https://objo.dev/download |
-                grep -oE \
-                  'Latest version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' |
-                head -n 1 |
-                sed -E 's/Latest version:[[:space:]]*//'
-            )"
-          fi
-
-          if [[ -z "$VERSION" ]]; then
-            echo "Could not determine the Objo Studio version." >&2
+      
+          JSON_URL="https://objo.dev/releases/stable.json"
+          RELEASE_JSON="$RUNNER_TEMP/objo-stable.json"
+      
+          curl -fsSL "$JSON_URL" -o "$RELEASE_JSON"
+      
+          STABLE_VERSION="$(jq -er '.version' "$RELEASE_JSON")"
+          STABLE_BASE_URL="$(jq -er '.downloads_base_url' "$RELEASE_JSON")"
+          STABLE_DOWNLOAD_URL="$(jq -er '.downloads.linux.url' "$RELEASE_JSON")"
+      
+          if [[ ! "$STABLE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid stable version in stable.json: $STABLE_VERSION" >&2
             exit 1
           fi
-
-          echo "Using Objo Studio version: $VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
+      
+          if [[ -n "$REQUESTED_VERSION" ]]; then
+            VERSION="$REQUESTED_VERSION"
+      
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid requested Objo Studio version: $VERSION" >&2
+              exit 1
+            fi
+      
+            DOWNLOADS_BASE_URL="$(
+              printf '%s' "$STABLE_BASE_URL" |
+                sed "s#/${STABLE_VERSION}\$#/${VERSION}#"
+            )"
+      
+            DOWNLOAD_URL="$(
+              printf '%s' "$STABLE_DOWNLOAD_URL" |
+                sed "s#${STABLE_VERSION}#${VERSION}#g"
+            )"
+      
+            echo "Using requested Objo Studio version: $VERSION"
+          else
+            VERSION="$STABLE_VERSION"
+            DOWNLOADS_BASE_URL="$STABLE_BASE_URL"
+            DOWNLOAD_URL="$STABLE_DOWNLOAD_URL"
+      
+            echo "Using latest Objo Studio version: $VERSION"
+          fi
+      
+          if [[ -z "$DOWNLOAD_URL" ]]; then
+            echo "Could not determine the Linux download URL." >&2
+            exit 1
+          fi
+      
+          {
+            echo "version=$VERSION"
+            echo "downloads_base_url=$DOWNLOADS_BASE_URL"
+            echo "download_url=$DOWNLOAD_URL"
+          } >> "$GITHUB_OUTPUT"
+      
+          echo "Downloads base URL: $DOWNLOADS_BASE_URL"
+          echo "Download URL: $DOWNLOAD_URL"
+          
       - name: Restore Objo Studio cache
         id: cache-objo
         uses: actions/cache@v4
@@ -151,9 +186,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          ARCHIVE="$RUNNER_TEMP/Objo-Studio-${VERSION}-linux-x64.tar.gz"
-          URL="https://downloads.objo.dev/releases/${VERSION}/Objo-Studio-${VERSION}-linux-x64.tar.gz"
-
+          VERSION="${{ steps.version.outputs.version }}"
+          URL=${{ steps.version.outputs.download_url }}
+          ARCHIVE="$RUNNER_TEMP/$(basename "$URL")"
+          
           sudo rm -rf /opt/objo-studio
           sudo mkdir -p /opt/objo-studio
           sudo chown "$USER":"$(id -gn)" /opt/objo-studio
@@ -208,21 +244,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          cleanup() {
-            echo "Deactivating Objo license..."
-            "$OBJO_BIN" license deactivate || true
-
-            if [[ -d "$OUTPUT_DIRECTORY" ]]; then
-              echo "Output directory contents:"
-              find "$OUTPUT_DIRECTORY" \
-                -maxdepth 4 \
-                -type f \
-                -print || true
-            fi
-          }
-
-          trap cleanup EXIT
-
           mkdir -p "$OUTPUT_DIRECTORY"
           echo "Publishing to: $OUTPUT_DIRECTORY"
 
@@ -239,13 +260,10 @@ jobs:
           for target in "${TARGET_LIST[@]}"; do
             target="$(
               printf '%s' "$target" |
-                sed -E \
-                  's/^[[:space:]]+//; s/[[:space:]]+$//'
+                sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
             )"
 
-            if [[ -z "$target" ]]; then
-              continue
-            fi
+            [[ -z "$target" ]] && continue
 
             echo "Adding publish target: $target"
             cmd+=(--rid "$target")
@@ -264,6 +282,23 @@ jobs:
           echo
 
           "${cmd[@]}"
+
+      - name: Deactivate Objo license
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          echo "Deactivating Objo license..."
+          "$OBJO_BIN" license deactivate
+
+          if [[ -d "$OUTPUT_DIRECTORY" ]]; then
+            echo "Output directory contents:"
+            find "$OUTPUT_DIRECTORY" \
+              -maxdepth 4 \
+              -type f \
+              -print || true
+          fi
 
       - name: Collect Linux archives
         shell: bash

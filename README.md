@@ -124,7 +124,7 @@ Each workflow can be called from another repository using:
 ```yaml
 jobs:
   publish:
-    uses: madamov/ObjoPublisher/.github/workflows/<workflow>.yml@main
+    uses: madamov/ObjoPublisher/.github/workflows/<workflow>.yml@v1
 ```
 
 ---
@@ -310,7 +310,7 @@ only the Apple Silicon DMG is uploaded.
 ```yaml
 jobs:
   publish:
-    uses: madamov/ObjoPublisher/.github/workflows/publish_objo_macos.yml@main
+    uses: madamov/ObjoPublisher/.github/workflows/publish_objo_macos.yml@v1
 
     with:
       solution-file: MyGreatApp.objosln
@@ -496,7 +496,7 @@ MyGreatApp-linux-arm64.tar.gz
 ```yaml
 jobs:
   publish:
-    uses: madamov/ObjoPublisher/.github/workflows/publish_objo_linux.yml@main
+    uses: madamov/ObjoPublisher/.github/workflows/publish_objo_linux.yml@v1
 
     with:
       solution-file: MyGreatApp.objosln
@@ -774,7 +774,7 @@ on:
 
 jobs:
   publish-windows:
-    uses: madamov/ObjoPublisher/.github/workflows/publish_objo_windows.yml@main
+    uses: madamov/ObjoPublisher/.github/workflows/publish_objo_windows.yml@v1
 
     with:
       solution-file: MyGreatApp.objosln
@@ -1074,7 +1074,7 @@ on:
 
 jobs:
   publish:
-    uses: madamov/ObjoPublisher/.github/workflows/publish_objo_windows_objosign.yml@main
+    uses: madamov/ObjoPublisher/.github/workflows/publish_objo_windows_objosign.yml@v1
 
     with:
       solution-file: MyGreatApp.objosln

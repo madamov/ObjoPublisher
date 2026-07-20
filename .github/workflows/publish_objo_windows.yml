@@ -155,24 +155,51 @@ jobs:
         run: |
           set -euo pipefail
 
+          JSON_URL="https://objo.dev/releases/stable.json"
+          RELEASE_JSON="$RUNNER_TEMP/objo-stable.json"
+
+          curl -fsSL "$JSON_URL" -o "$RELEASE_JSON"
+
+          STABLE_VERSION="$(jq -er '.version' "$RELEASE_JSON")"
+          STABLE_BASE_URL="$(jq -er '.downloads_base_url' "$RELEASE_JSON")"
+          STABLE_DOWNLOAD_URL="$(
+            jq -er '
+              .downloads.windows.variant_items[]
+              | select(.platform=="win-x64-portable")
+              | .url
+            ' "$RELEASE_JSON"
+          )"
+
           if [[ -n "$REQUESTED_VERSION" ]]; then
             VERSION="$REQUESTED_VERSION"
-          else
-            VERSION="$(
-              curl -fsSL https://objo.dev/download |
-              grep -oE \
-                'Latest version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' |
-              head -n1 |
-              sed -E 's/Latest version:[[:space:]]*//'
+
+            DOWNLOADS_BASE_URL="$(
+              printf '%s' "$STABLE_BASE_URL" |
+                sed "s#/${STABLE_VERSION}\$#/${VERSION}#"
             )"
+
+            DOWNLOAD_URL="$(
+              printf '%s' "$STABLE_DOWNLOAD_URL" |
+                sed "s#${STABLE_VERSION}#${VERSION}#g"
+            )"
+
+            echo "Using requested Objo Studio version: $VERSION"
+          else
+            VERSION="$STABLE_VERSION"
+            DOWNLOADS_BASE_URL="$STABLE_BASE_URL"
+            DOWNLOAD_URL="$STABLE_DOWNLOAD_URL"
+
+            echo "Using latest Objo Studio version: $VERSION"
           fi
 
-          if [[ -z "$VERSION" ]]; then
-            echo "Could not determine Objo Studio version." >&2
-            exit 1
-          fi
+          {
+            echo "version=$VERSION"
+            echo "downloads_base_url=$DOWNLOADS_BASE_URL"
+            echo "download_url=$DOWNLOAD_URL"
+          } >> "$GITHUB_OUTPUT"
 
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Downloads base URL: $DOWNLOADS_BASE_URL"
+          echo "Download URL: $DOWNLOAD_URL"
 
       - name: Restore Objo Studio cache
         id: cache-objo
@@ -185,17 +212,24 @@ jobs:
         if: steps.cache-objo.outputs.cache-hit != 'true'
         shell: pwsh
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          URL: ${{ steps.version.outputs.download_url }}
         run: |
           $ErrorActionPreference = "Stop"
 
-          $zip = "$env:RUNNER_TEMP\objo.zip"
+          $zip = Join-Path $env:RUNNER_TEMP (Split-Path $env:URL -Leaf)
+
+          Write-Host "Downloading $env:URL"
+          Write-Host "Archive: $zip"
 
           Invoke-WebRequest `
-            -Uri "https://downloads.objo.dev/releases/$env:VERSION/Objo-Studio-$env:VERSION-windows-x64.zip" `
+            -Uri $env:URL `
             -OutFile $zip
 
-          Remove-Item C:\Objo -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item `
+            C:\Objo `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
 
           Expand-Archive `
             -Path $zip `
@@ -336,96 +370,95 @@ jobs:
           PUBLISH_TARGETS: ${{ inputs.targets }}
         run: |
           $ErrorActionPreference = "Stop"
-
-          function Invoke-ObjoLicenseCleanup {
-            Write-Host "Deactivating Objo license..."
-
-            try {
-              & $env:OBJO_BIN license deactivate
-
-              if ($LASTEXITCODE -ne 0) {
-                Write-Warning "Objo license deactivation returned exit code $LASTEXITCODE."
-              }
+      
+          New-Item `
+            -ItemType Directory `
+            -Path $env:OUTPUT_DIRECTORY `
+            -Force |
+            Out-Null
+      
+          Write-Host "Publishing to: $env:OUTPUT_DIRECTORY"
+      
+          $arguments = @(
+            "publish"
+            $env:SOLUTION_FILE
+          )
+      
+          $correlationId = $env:AZURE_CORRELATION_ID
+      
+          if ([string]::IsNullOrWhiteSpace($correlationId)) {
+            $correlationId = "$($env:APPLICATION_NAME)-$($env:GITHUB_RUN_ID)"
+          }
+      
+          "AZURE_CORRELATION_ID=$correlationId" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+      
+          Write-Host "Azure correlation ID: $correlationId"
+      
+          $targetCount = 0
+      
+          foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
+            $target = $targetValue.Trim()
+      
+            if ([string]::IsNullOrWhiteSpace($target)) {
+              continue
             }
-            catch {
-              Write-Warning "Objo license cleanup failed: $($_.Exception.Message)"
-            }
-
-            if (Test-Path $env:OUTPUT_DIRECTORY) {
-              Write-Host "Output directory contents:"
-
-              Get-ChildItem `
-                -Path $env:OUTPUT_DIRECTORY `
-                -Recurse `
-                -Force `
-                -ErrorAction SilentlyContinue |
-              Select-Object FullName, Length |
-              Format-Table -AutoSize
-            }
+      
+            Write-Host "Adding publish target: $target"
+      
+            $arguments += "--rid"
+            $arguments += $target
+            $targetCount++
+          }
+      
+          if ($targetCount -eq 0) {
+            throw "No valid Windows publish targets were provided."
+          }
+      
+          $arguments += "--output"
+          $arguments += $env:OUTPUT_DIRECTORY
+      
+          Write-Host "Running:"
+          Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
+      
+          & $env:OBJO_BIN @arguments
+      
+          if ($LASTEXITCODE -ne 0) {
+            throw "Objo publish failed with exit code $LASTEXITCODE."
           }
 
+      - name: Deactivate Objo license
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+      
+          Write-Host "Deactivating Objo license..."
+      
           try {
-            New-Item `
-              -ItemType Directory `
-              -Path $env:OUTPUT_DIRECTORY `
-              -Force |
-              Out-Null
-
-            Write-Host "Publishing to: $env:OUTPUT_DIRECTORY"
-
-            $arguments = @(
-              "publish"
-              $env:SOLUTION_FILE
-            )
-
-           $correlationId = $env:AZURE_CORRELATION_ID
-           
-           if ([string]::IsNullOrWhiteSpace($correlationId)) {
-               $correlationId = "$($env:APPLICATION_NAME)-$($env:GITHUB_RUN_ID)"
-           }
-           
-           "AZURE_CORRELATION_ID=$correlationId" |
-               Out-File `
-                   -FilePath $env:GITHUB_ENV `
-                   -Append `
-                   -Encoding utf8
-           
-           Write-Host "Azure correlation ID: $correlationId"
-
-            $targetCount = 0
-
-            foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
-              $target = $targetValue.Trim()
-
-              if ([string]::IsNullOrWhiteSpace($target)) {
-                continue
-              }
-
-              Write-Host "Adding publish target: $target"
-
-              $arguments += "--rid"
-              $arguments += $target
-              $targetCount++
-            }
-
-            if ($targetCount -eq 0) {
-              throw "No valid Windows publish targets were provided."
-            }
-
-            $arguments += "--output"
-            $arguments += $env:OUTPUT_DIRECTORY
-
-            Write-Host "Running:"
-            Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
-
-            & $env:OBJO_BIN @arguments
-
+            & $env:OBJO_BIN license deactivate
+      
             if ($LASTEXITCODE -ne 0) {
-              throw "Objo publish failed with exit code $LASTEXITCODE."
+              Write-Warning "Objo license deactivation returned exit code $LASTEXITCODE."
             }
           }
-          finally {
-            Invoke-ObjoLicenseCleanup
+          catch {
+            Write-Warning "Objo license deactivation failed: $($_.Exception.Message)"
+          }
+      
+          if (Test-Path $env:OUTPUT_DIRECTORY) {
+            Write-Host "Output directory contents:"
+      
+            Get-ChildItem `
+              -Path $env:OUTPUT_DIRECTORY `
+              -Recurse `
+              -Force `
+              -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
           }
 
       - name: Azure Trusted Signing (with timestamp)

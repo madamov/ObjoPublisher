@@ -90,14 +90,27 @@ jobs:
       APPLICATION_NAME: ${{ inputs.application-name }}
 
     steps:
-      # This checks out the repository that called this reusable workflow.
+
       - name: Check out application repository
         uses: actions/checkout@v4
 
       - name: Set output directory
         shell: bash
+        env:
+          OUTPUT_INPUT: ${{ inputs.output-directory }}
         run: |
-            echo "OUTPUT_DIRECTORY=$HOME/Documents/ObjoPublisher" >> "$GITHUB_ENV"
+          set -euo pipefail
+      
+          if [[ "$OUTPUT_INPUT" = /* ]]; then
+            OUTPUT_DIRECTORY="$OUTPUT_INPUT"
+          else
+            OUTPUT_DIRECTORY="$HOME/Documents/$OUTPUT_INPUT"
+          fi
+      
+          echo "OUTPUT_DIRECTORY=$OUTPUT_DIRECTORY" >> "$GITHUB_ENV"
+      
+          echo "Using output directory:"
+          echo "  $OUTPUT_DIRECTORY"
 
       - name: Check Apple signing parameters
         id: apple-signing
@@ -285,25 +298,45 @@ jobs:
         run: |
           set -euo pipefail
 
+          JSON_URL="https://objo.dev/releases/stable.json"
+          RELEASE_JSON="$RUNNER_TEMP/objo-stable.json"
+
+          curl -fsSL "$JSON_URL" -o "$RELEASE_JSON"
+
+          STABLE_VERSION="$(jq -er '.version' "$RELEASE_JSON")"
+          STABLE_BASE_URL="$(jq -er '.downloads_base_url' "$RELEASE_JSON")"
+          STABLE_DOWNLOAD_URL="$(jq -er '.downloads.macos.variant_items[0].url' "$RELEASE_JSON")"
+
           if [[ -n "$REQUESTED_VERSION" ]]; then
             VERSION="$REQUESTED_VERSION"
-          else
-            VERSION="$(
-              curl -fsSL https://objo.dev/download |
-              grep -oE \
-                'Latest version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' |
-              head -n 1 |
-              sed -E 's/Latest version:[[:space:]]*//'
+
+            DOWNLOADS_BASE_URL="$(
+              printf '%s' "$STABLE_BASE_URL" |
+                sed "s#/${STABLE_VERSION}\$#/${VERSION}#"
             )"
+
+            DOWNLOAD_URL="$(
+              printf '%s' "$STABLE_DOWNLOAD_URL" |
+                sed "s#${STABLE_VERSION}#${VERSION}#g"
+            )"
+
+            echo "Using requested Objo Studio version: $VERSION"
+          else
+            VERSION="$STABLE_VERSION"
+            DOWNLOADS_BASE_URL="$STABLE_BASE_URL"
+            DOWNLOAD_URL="$STABLE_DOWNLOAD_URL"
+
+            echo "Using latest Objo Studio version: $VERSION"
           fi
 
-          if [[ -z "$VERSION" ]]; then
-            echo "Could not determine the Objo Studio version." >&2
-            exit 1
-          fi
+          {
+            echo "version=$VERSION"
+            echo "downloads_base_url=$DOWNLOADS_BASE_URL"
+            echo "download_url=$DOWNLOAD_URL"
+          } >> "$GITHUB_OUTPUT"
 
-          echo "Using Objo Studio version: $VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Downloads base URL: $DOWNLOADS_BASE_URL"
+          echo "Download URL: $DOWNLOAD_URL"
 
       - name: Restore Objo Studio cache
         id: cache-objo
@@ -320,9 +353,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          DMG="$RUNNER_TEMP/Objo-Studio-${VERSION}-macOS-arm64.dmg"
-          URL="https://downloads.objo.dev/releases/${VERSION}/Objo-Studio-${VERSION}-macOS-arm64.dmg"
           MOUNT_POINT=""
+
+          VERSION="${{ steps.version.outputs.version }}"
+          URL="${{ steps.version.outputs.download_url }}"
+          DMG="$RUNNER_TEMP/$(basename "$URL")"
 
           cleanup_mount() {
             if [[ -n "$MOUNT_POINT" ]] &&
@@ -413,53 +448,66 @@ jobs:
 
       - name: Publish macOS application
         shell: bash
+        env:
+          PUBLISH_TARGETS: ${{ inputs.targets }}
         run: |
           set -euo pipefail
-      
-          cleanup() {
-            echo "Deactivating Objo license..."
-            "$OBJO_BIN" license deactivate || true
-            echo "Output directory contents:"
-            ls -alR $OUTPUT_DIRECTORY
-          }
-      
-          trap cleanup EXIT
-      
-          mkdir -p "$OUTPUT_DIRECTORY"
-          echo $OUTPUT_DIRECTORY
-      
-          #          "$OBJO_BIN" publish "$SOLUTION_FILE" \
-          #            --rid osx-arm64 \
-          #            --rid osx-x64 \
-          #            --output "$OUTPUT_DIRECTORY"
 
-          # Build the publish command
-          
+          mkdir -p "$OUTPUT_DIRECTORY"
+          echo "Publishing to: $OUTPUT_DIRECTORY"
+
           cmd=(
-             "$OBJO_BIN"
-             publish
-             "$SOLUTION_FILE"
-           )
-           
-           # Split comma-separated targets, trim whitespace and add one --rid per target
-           IFS=',' read -ra TARGETS <<< "${{ inputs.targets }}"
-           
-           for target in "${TARGETS[@]}"; do
-             # Trim leading/trailing whitespace
-             target="$(echo "$target" | xargs)"
-           
-             [[ -z "$target" ]] && continue
-           
-             cmd+=(--rid "$target")
-           done
-           
-           cmd+=(--output "$OUTPUT_DIRECTORY")
-           
-           echo "Running:"
-           printf ' %q' "${cmd[@]}"
-            echo
-           
-           "${cmd[@]}"
+            "$OBJO_BIN"
+            publish
+            "$SOLUTION_FILE"
+          )
+
+          IFS=',' read -ra TARGET_LIST <<< "$PUBLISH_TARGETS"
+
+          target_count=0
+
+          for target in "${TARGET_LIST[@]}"; do
+            target="$(
+              printf '%s' "$target" |
+                sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
+            )"
+
+            [[ -z "$target" ]] && continue
+
+            echo "Adding publish target: $target"
+            cmd+=(--rid "$target")
+            ((target_count += 1))
+          done
+
+          if (( target_count == 0 )); then
+            echo "No valid macOS publish targets were provided." >&2
+            exit 1
+          fi
+
+          cmd+=(--output "$OUTPUT_DIRECTORY")
+
+          echo "Running command:"
+          printf ' %q' "${cmd[@]}"
+          echo
+
+          "${cmd[@]}"
+          
+      - name: Deactivate Objo license
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          echo "Deactivating Objo license..."
+          "$OBJO_BIN" license deactivate
+
+          if [[ -d "$OUTPUT_DIRECTORY" ]]; then
+            echo "Output directory contents:"
+            find "$OUTPUT_DIRECTORY" \
+              -maxdepth 4 \
+              -type f \
+              -print || true
+          fi
 
       - name: Collect macOS disk images
         shell: bash

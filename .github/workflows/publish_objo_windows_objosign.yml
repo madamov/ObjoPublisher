@@ -196,25 +196,51 @@ jobs:
         run: |
           set -euo pipefail
 
+          JSON_URL="https://objo.dev/releases/stable.json"
+          RELEASE_JSON="$RUNNER_TEMP/objo-stable.json"
+
+          curl -fsSL "$JSON_URL" -o "$RELEASE_JSON"
+
+          STABLE_VERSION="$(jq -er '.version' "$RELEASE_JSON")"
+          STABLE_BASE_URL="$(jq -er '.downloads_base_url' "$RELEASE_JSON")"
+          STABLE_DOWNLOAD_URL="$(
+            jq -er '
+              .downloads.windows.variant_items[]
+              | select(.platform=="win-x64-portable")
+              | .url
+            ' "$RELEASE_JSON"
+          )"
+
           if [[ -n "$REQUESTED_VERSION" ]]; then
             VERSION="$REQUESTED_VERSION"
-          else
-            VERSION="$(
-              curl -fsSL https://objo.dev/download |
-                grep -oE \
-                  'Latest version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' |
-                head -n 1 |
-                sed -E 's/Latest version:[[:space:]]*//'
+
+            DOWNLOADS_BASE_URL="$(
+              printf '%s' "$STABLE_BASE_URL" |
+                sed "s#/${STABLE_VERSION}\$#/${VERSION}#"
             )"
+
+            DOWNLOAD_URL="$(
+              printf '%s' "$STABLE_DOWNLOAD_URL" |
+                sed "s#${STABLE_VERSION}#${VERSION}#g"
+            )"
+
+            echo "Using requested Objo Studio version: $VERSION"
+          else
+            VERSION="$STABLE_VERSION"
+            DOWNLOADS_BASE_URL="$STABLE_BASE_URL"
+            DOWNLOAD_URL="$STABLE_DOWNLOAD_URL"
+
+            echo "Using latest Objo Studio version: $VERSION"
           fi
 
-          if [[ -z "$VERSION" ]]; then
-            echo "Could not determine the Objo Studio version." >&2
-            exit 1
-          fi
+          {
+            echo "version=$VERSION"
+            echo "downloads_base_url=$DOWNLOADS_BASE_URL"
+            echo "download_url=$DOWNLOAD_URL"
+          } >> "$GITHUB_OUTPUT"
 
-          echo "Using Objo Studio version: $VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Downloads base URL: $DOWNLOADS_BASE_URL"
+          echo "Download URL: $DOWNLOAD_URL"
 
       - name: Restore Objo Studio cache
         id: cache-objo
@@ -223,40 +249,32 @@ jobs:
           path: C:\Objo
           key: objo-studio-windows-${{ steps.version.outputs.version }}
 
-      - name: Download and extract Objo Studio portable
+      - name: Download Objo Studio
         if: steps.cache-objo.outputs.cache-hit != 'true'
         shell: pwsh
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          URL: ${{ steps.version.outputs.download_url }}
         run: |
           $ErrorActionPreference = "Stop"
 
-          $archiveName = "Objo-Studio-$env:VERSION-win-x64-portable.zip"
-          $archivePath = Join-Path $env:RUNNER_TEMP $archiveName
-          $url = "https://downloads.objo.dev/releases/$env:VERSION/$archiveName"
+          $zip = Join-Path $env:RUNNER_TEMP (Split-Path $env:URL -Leaf)
 
-          Write-Host "Downloading Objo Studio:"
-          Write-Host $url
+          Write-Host "Downloading $env:URL"
+          Write-Host "Archive: $zip"
+
+          Invoke-WebRequest `
+            -Uri $env:URL `
+            -OutFile $zip
 
           Remove-Item `
-            -LiteralPath "C:\Objo" `
+            C:\Objo `
             -Recurse `
             -Force `
             -ErrorAction SilentlyContinue
 
-          New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path "C:\Objo" |
-            Out-Null
-
-          Invoke-WebRequest `
-            -Uri $url `
-            -OutFile $archivePath
-
           Expand-Archive `
-            -LiteralPath $archivePath `
-            -DestinationPath "C:\Objo" `
+            -Path $zip `
+            -DestinationPath C:\Objo `
             -Force
 
       - name: Find Objo executable
@@ -401,113 +419,101 @@ jobs:
           echo "Updated Windows signing section:"
           jq '.Metadata.Signing.Windows' "$PROJECT_FILE"
 
-      - name: Activate Objo license and publish Windows application
+      - name: Publish Windows application
         shell: pwsh
         env:
           PUBLISH_TARGETS: ${{ inputs.targets }}
         run: |
           $ErrorActionPreference = "Stop"
-
-          $licenseFile = Join-Path `
-            $env:RUNNER_TEMP `
-            "objo-license-key.txt"
-
-          $publishExitCode = 1
-          $licenseActivated = $false
-
-          try {
-            Set-Content `
-              -LiteralPath $licenseFile `
-              -Value $env:OBJO_LICENSE `
-              -NoNewline `
+      
+          New-Item `
+            -ItemType Directory `
+            -Path $env:OUTPUT_DIRECTORY `
+            -Force |
+            Out-Null
+      
+          Write-Host "Publishing to: $env:OUTPUT_DIRECTORY"
+      
+          $arguments = @(
+            "publish"
+            $env:SOLUTION_FILE
+          )
+      
+          $correlationId = $env:AZURE_CORRELATION_ID
+      
+          if ([string]::IsNullOrWhiteSpace($correlationId)) {
+            $correlationId = "$($env:APPLICATION_NAME)-$($env:GITHUB_RUN_ID)"
+          }
+      
+          "AZURE_CORRELATION_ID=$correlationId" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
               -Encoding utf8
+      
+          Write-Host "Azure correlation ID: $correlationId"
+      
+          $targetCount = 0
+      
+          foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
+            $target = $targetValue.Trim()
+      
+            if ([string]::IsNullOrWhiteSpace($target)) {
+              continue
+            }
+      
+            Write-Host "Adding publish target: $target"
+      
+            $arguments += "--rid"
+            $arguments += $target
+            $targetCount++
+          }
+      
+          if ($targetCount -eq 0) {
+            throw "No valid Windows publish targets were provided."
+          }
+      
+          $arguments += "--output"
+          $arguments += $env:OUTPUT_DIRECTORY
+      
+          Write-Host "Running:"
+          Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
+      
+          & $env:OBJO_BIN @arguments
+      
+          if ($LASTEXITCODE -ne 0) {
+            throw "Objo publish failed with exit code $LASTEXITCODE."
+          }
 
-            & $env:OBJO_BIN license activate `
-              --key-file $licenseFile
-
+      - name: Deactivate Objo license
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+      
+          Write-Host "Deactivating Objo license..."
+      
+          try {
+            & $env:OBJO_BIN license deactivate
+      
             if ($LASTEXITCODE -ne 0) {
-              throw "License activation failed with exit code $LASTEXITCODE."
-            }
-
-            $licenseActivated = $true
-
-            New-Item `
-              -ItemType Directory `
-              -Path $env:OUTPUT_DIRECTORY `
-              -Force |
-              Out-Null
-
-            $arguments = @(
-              "publish"
-              $env:SOLUTION_FILE
-            )
-
-            $targetCount = 0
-
-            foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
-              $target = $targetValue.Trim()
-
-              if ([string]::IsNullOrWhiteSpace($target)) {
-                continue
-              }
-
-              Write-Host "Adding publish target: $target"
-
-              $arguments += "--rid"
-              $arguments += $target
-              $targetCount++
-            }
-
-            if ($targetCount -eq 0) {
-              throw "No valid Windows publish targets were provided."
-            }
-
-            $arguments += "--output"
-            $arguments += $env:OUTPUT_DIRECTORY
-
-            Write-Host "Publishing and signing Windows application:"
-            Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
-
-            & $env:OBJO_BIN @arguments
-
-            $publishExitCode = $LASTEXITCODE
-
-            Write-Host "Objo publish exit code: $publishExitCode"
-
-            if ($publishExitCode -ne 0) {
-              throw "Objo publish failed with exit code $publishExitCode."
+              Write-Warning "Objo license deactivation returned exit code $LASTEXITCODE."
             }
           }
-          finally {
-            if ($licenseActivated) {
-              Write-Host "Deactivating Objo license..."
-
-              try {
-                & $env:OBJO_BIN license deactivate
-
-                Write-Host "Objo license deactivate exit code: $LASTEXITCODE"
-              }
-              catch {
-                Write-Warning "Objo license deactivation failed: $($_.Exception.Message)"
-              }
-            }
-
-            Remove-Item `
-              -LiteralPath $licenseFile `
+          catch {
+            Write-Warning "Objo license deactivation failed: $($_.Exception.Message)"
+          }
+      
+          if (Test-Path $env:OUTPUT_DIRECTORY) {
+            Write-Host "Output directory contents:"
+      
+            Get-ChildItem `
+              -Path $env:OUTPUT_DIRECTORY `
+              -Recurse `
               -Force `
-              -ErrorAction SilentlyContinue
-
-            if (Test-Path -LiteralPath $env:OUTPUT_DIRECTORY) {
-              Write-Host "Output directory contents:"
-
-              Get-ChildItem `
-                -LiteralPath $env:OUTPUT_DIRECTORY `
-                -Recurse `
-                -Force `
-                -ErrorAction SilentlyContinue |
-                Select-Object FullName, Length |
-                Format-Table -AutoSize
-            }
+              -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
           }
 
       - name: Collect signed Windows packages
