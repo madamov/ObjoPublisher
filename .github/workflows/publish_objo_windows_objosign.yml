@@ -419,113 +419,101 @@ jobs:
           echo "Updated Windows signing section:"
           jq '.Metadata.Signing.Windows' "$PROJECT_FILE"
 
-      - name: Activate Objo license and publish Windows application
+      - name: Publish Windows application
         shell: pwsh
         env:
           PUBLISH_TARGETS: ${{ inputs.targets }}
         run: |
           $ErrorActionPreference = "Stop"
-
-          $licenseFile = Join-Path `
-            $env:RUNNER_TEMP `
-            "objo-license-key.txt"
-
-          $publishExitCode = 1
-          $licenseActivated = $false
-
-          try {
-            Set-Content `
-              -LiteralPath $licenseFile `
-              -Value $env:OBJO_LICENSE `
-              -NoNewline `
+      
+          New-Item `
+            -ItemType Directory `
+            -Path $env:OUTPUT_DIRECTORY `
+            -Force |
+            Out-Null
+      
+          Write-Host "Publishing to: $env:OUTPUT_DIRECTORY"
+      
+          $arguments = @(
+            "publish"
+            $env:SOLUTION_FILE
+          )
+      
+          $correlationId = $env:AZURE_CORRELATION_ID
+      
+          if ([string]::IsNullOrWhiteSpace($correlationId)) {
+            $correlationId = "$($env:APPLICATION_NAME)-$($env:GITHUB_RUN_ID)"
+          }
+      
+          "AZURE_CORRELATION_ID=$correlationId" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
               -Encoding utf8
+      
+          Write-Host "Azure correlation ID: $correlationId"
+      
+          $targetCount = 0
+      
+          foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
+            $target = $targetValue.Trim()
+      
+            if ([string]::IsNullOrWhiteSpace($target)) {
+              continue
+            }
+      
+            Write-Host "Adding publish target: $target"
+      
+            $arguments += "--rid"
+            $arguments += $target
+            $targetCount++
+          }
+      
+          if ($targetCount -eq 0) {
+            throw "No valid Windows publish targets were provided."
+          }
+      
+          $arguments += "--output"
+          $arguments += $env:OUTPUT_DIRECTORY
+      
+          Write-Host "Running:"
+          Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
+      
+          & $env:OBJO_BIN @arguments
+      
+          if ($LASTEXITCODE -ne 0) {
+            throw "Objo publish failed with exit code $LASTEXITCODE."
+          }
 
-            & $env:OBJO_BIN license activate `
-              --key-file $licenseFile
-
+      - name: Deactivate Objo license
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+      
+          Write-Host "Deactivating Objo license..."
+      
+          try {
+            & $env:OBJO_BIN license deactivate
+      
             if ($LASTEXITCODE -ne 0) {
-              throw "License activation failed with exit code $LASTEXITCODE."
-            }
-
-            $licenseActivated = $true
-
-            New-Item `
-              -ItemType Directory `
-              -Path $env:OUTPUT_DIRECTORY `
-              -Force |
-              Out-Null
-
-            $arguments = @(
-              "publish"
-              $env:SOLUTION_FILE
-            )
-
-            $targetCount = 0
-
-            foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
-              $target = $targetValue.Trim()
-
-              if ([string]::IsNullOrWhiteSpace($target)) {
-                continue
-              }
-
-              Write-Host "Adding publish target: $target"
-
-              $arguments += "--rid"
-              $arguments += $target
-              $targetCount++
-            }
-
-            if ($targetCount -eq 0) {
-              throw "No valid Windows publish targets were provided."
-            }
-
-            $arguments += "--output"
-            $arguments += $env:OUTPUT_DIRECTORY
-
-            Write-Host "Publishing and signing Windows application:"
-            Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
-
-            & $env:OBJO_BIN @arguments
-
-            $publishExitCode = $LASTEXITCODE
-
-            Write-Host "Objo publish exit code: $publishExitCode"
-
-            if ($publishExitCode -ne 0) {
-              throw "Objo publish failed with exit code $publishExitCode."
+              Write-Warning "Objo license deactivation returned exit code $LASTEXITCODE."
             }
           }
-          finally {
-            if ($licenseActivated) {
-              Write-Host "Deactivating Objo license..."
-
-              try {
-                & $env:OBJO_BIN license deactivate
-
-                Write-Host "Objo license deactivate exit code: $LASTEXITCODE"
-              }
-              catch {
-                Write-Warning "Objo license deactivation failed: $($_.Exception.Message)"
-              }
-            }
-
-            Remove-Item `
-              -LiteralPath $licenseFile `
+          catch {
+            Write-Warning "Objo license deactivation failed: $($_.Exception.Message)"
+          }
+      
+          if (Test-Path $env:OUTPUT_DIRECTORY) {
+            Write-Host "Output directory contents:"
+      
+            Get-ChildItem `
+              -Path $env:OUTPUT_DIRECTORY `
+              -Recurse `
               -Force `
-              -ErrorAction SilentlyContinue
-
-            if (Test-Path -LiteralPath $env:OUTPUT_DIRECTORY) {
-              Write-Host "Output directory contents:"
-
-              Get-ChildItem `
-                -LiteralPath $env:OUTPUT_DIRECTORY `
-                -Recurse `
-                -Force `
-                -ErrorAction SilentlyContinue |
-                Select-Object FullName, Length |
-                Format-Table -AutoSize
-            }
+              -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
           }
 
       - name: Collect signed Windows packages
