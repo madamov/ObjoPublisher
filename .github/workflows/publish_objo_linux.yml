@@ -244,21 +244,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          cleanup() {
-            echo "Deactivating Objo license..."
-            "$OBJO_BIN" license deactivate || true
-
-            if [[ -d "$OUTPUT_DIRECTORY" ]]; then
-              echo "Output directory contents:"
-              find "$OUTPUT_DIRECTORY" \
-                -maxdepth 4 \
-                -type f \
-                -print || true
-            fi
-          }
-
-          trap cleanup EXIT
-
           mkdir -p "$OUTPUT_DIRECTORY"
           echo "Publishing to: $OUTPUT_DIRECTORY"
 
@@ -275,13 +260,10 @@ jobs:
           for target in "${TARGET_LIST[@]}"; do
             target="$(
               printf '%s' "$target" |
-                sed -E \
-                  's/^[[:space:]]+//; s/[[:space:]]+$//'
+                sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
             )"
 
-            if [[ -z "$target" ]]; then
-              continue
-            fi
+            [[ -z "$target" ]] && continue
 
             echo "Adding publish target: $target"
             cmd+=(--rid "$target")
@@ -300,6 +282,23 @@ jobs:
           echo
 
           "${cmd[@]}"
+
+      - name: Deactivate Objo license
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          echo "Deactivating Objo license..."
+          "$OBJO_BIN" license deactivate
+
+          if [[ -d "$OUTPUT_DIRECTORY" ]]; then
+            echo "Output directory contents:"
+            find "$OUTPUT_DIRECTORY" \
+              -maxdepth 4 \
+              -type f \
+              -print || true
+          fi
 
       - name: Collect Linux archives
         shell: bash
