@@ -285,35 +285,45 @@ jobs:
         run: |
           set -euo pipefail
 
+          JSON_URL="https://objo.dev/releases/stable.json"
+          RELEASE_JSON="$RUNNER_TEMP/objo-stable.json"
+
+          curl -fsSL "$JSON_URL" -o "$RELEASE_JSON"
+
+          STABLE_VERSION="$(jq -er '.version' "$RELEASE_JSON")"
+          STABLE_BASE_URL="$(jq -er '.downloads_base_url' "$RELEASE_JSON")"
+          STABLE_DOWNLOAD_URL="$(jq -er '.downloads.macos.variant_items[0].url' "$RELEASE_JSON")"
+
           if [[ -n "$REQUESTED_VERSION" ]]; then
             VERSION="$REQUESTED_VERSION"
+
+            DOWNLOADS_BASE_URL="$(
+              printf '%s' "$STABLE_BASE_URL" |
+                sed "s#/${STABLE_VERSION}\$#/${VERSION}#"
+            )"
+
+            DOWNLOAD_URL="$(
+              printf '%s' "$STABLE_DOWNLOAD_URL" |
+                sed "s#${STABLE_VERSION}#${VERSION}#g"
+            )"
+
+            echo "Using requested Objo Studio version: $VERSION"
           else
-                JSON_URL="https://objo.dev/releases/stable.json"
-            
-                curl -fsSL "$JSON_URL" -o stable.json
-            
-                DOWNLOAD_URL="$(jq -r '.downloads.macos.variant_items[0].url' stable.json)"      
-      
-                if [[ -z "$VERSION" || "$VERSION" == "null" ]]; then
-                  echo "Failed to determine latest version."
-                  exit 1
-                fi
-            
-                if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
-                  echo "Failed to determine Linux download URL."
-                  exit 1
-                fi
-                
-                echo "download_url=$DOWNLOAD_URL" >> "$GITHUB_OUTPUT"
-                
-                echo "Latest version: $VERSION"
-                echo "Download URL: $DOWNLOAD_URL"
-          
+            VERSION="$STABLE_VERSION"
+            DOWNLOADS_BASE_URL="$STABLE_BASE_URL"
+            DOWNLOAD_URL="$STABLE_DOWNLOAD_URL"
+
+            echo "Using latest Objo Studio version: $VERSION"
           fi
 
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-      
+          {
+            echo "version=$VERSION"
+            echo "downloads_base_url=$DOWNLOADS_BASE_URL"
+            echo "download_url=$DOWNLOAD_URL"
+          } >> "$GITHUB_OUTPUT"
 
+          echo "Downloads base URL: $DOWNLOADS_BASE_URL"
+          echo "Download URL: $DOWNLOAD_URL"
 
       - name: Restore Objo Studio cache
         id: cache-objo
