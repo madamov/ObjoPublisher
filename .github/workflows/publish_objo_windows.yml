@@ -53,25 +53,25 @@ on:
         required: true
 
       azure-tenant-id:
-        required: true
+        required: false
 
       azure-client-id:
-        required: true
+        required: false
 
       azure-client-secret:
-        required: true
+        required: false
 
       azure-endpoint:
-        required: true
+        required: false
 
       azure-account-name:
-        required: true
+        required: false
 
       azure-certificate-profile-name:
-        required: true
+        required: false
 
       azure-package-publisher:
-        required: true
+        required: false
 
       azure-timestamp-url:
         required: false
