@@ -169,25 +169,6 @@ jobs:
             throw "Application name cannot be empty."
           }
 
-           $requiredAzureValues = @{
-             AZURE_ENDPOINT                 = $env:AZURE_ENDPOINT
-             AZURE_ACCOUNT_NAME             = $env:AZURE_ACCOUNT_NAME
-             AZURE_CERTIFICATE_PROFILE_NAME = $env:AZURE_CERTIFICATE_PROFILE_NAME
-             AZURE_PACKAGE_PUBLISHER        = $env:AZURE_PACKAGE_PUBLISHER
-           }
-
-          $missing = @(
-            foreach ($item in $requiredAzureValues.GetEnumerator()) {
-              if ([string]::IsNullOrWhiteSpace([string]$item.Value)) {
-                $item.Key
-              }
-            }
-          )
-
-          if ($missing.Count -gt 0) {
-            throw "Required Azure values are missing: $($missing -join ', ')"
-          }
-
       - name: Determine Objo Studio version
         id: version
         shell: bash
@@ -302,7 +283,30 @@ jobs:
           Write-Host "Found Objo executable:"
           Write-Host $objo.FullName
 
+      - name: Determine whether Azure signing is configured
+        shell: pwsh
+        run: |
+          $azureSigningEnabled =
+            -not [string]::IsNullOrWhiteSpace($env:AZURE_ENDPOINT) -and
+            -not [string]::IsNullOrWhiteSpace($env:AZURE_ACCOUNT_NAME) -and
+            -not [string]::IsNullOrWhiteSpace($env:AZURE_CERTIFICATE_PROFILE_NAME) -and
+            -not [string]::IsNullOrWhiteSpace($env:AZURE_PACKAGE_PUBLISHER)
+
+          "AZURE_SIGNING_ENABLED=$($azureSigningEnabled.ToString().ToLowerInvariant())" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+          if ($azureSigningEnabled) {
+            Write-Host "Azure Trusted Signing is enabled."
+          }
+          else {
+            Write-Host "Azure Trusted Signing is not configured. Windows packages will be published without signing."
+          }
+
       - name: Install Azure Artifact Signing Client Tools
+        if: ${{ env.AZURE_SIGNING_ENABLED == 'true' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
