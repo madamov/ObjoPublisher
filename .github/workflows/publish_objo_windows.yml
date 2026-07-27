@@ -92,7 +92,10 @@ jobs:
       AZURE_PACKAGE_PUBLISHER: ${{ secrets.azure-package-publisher }}
       AZURE_TIMESTAMP_URL: ${{ secrets.azure-timestamp-url }}
       AZURE_CORRELATION_ID: ${{ inputs.azure-correlation-id }}
-
+      AZURE_TENANT_ID: ${{ secrets.azure-tenant-id }}
+      AZURE_CLIENT_ID: ${{ secrets.azure-client-id }}
+      AZURE_CLIENT_SECRET: ${{ secrets.azure-client-secret }}
+      
       OBJO_LICENSE: ${{ secrets.objo-license }}
 
     steps:
@@ -462,7 +465,7 @@ jobs:
           }
 
       - name: Azure Trusted Signing (with timestamp)
-        if:   ${{ secrets.azure-tenant-id != '' && secrets.azure-client-id != '' && secrets.azure-client-secret != '' && secrets.azure-endpoint != '' && secrets.azure-account-name != '' && secrets.azure-certificate-profile-name != '' && secrets.azure-timestamp-url != '' }}
+        if: ${{ env.AZURE_TENANT_ID != '' && env.AZURE_CLIENT_ID != '' && env.AZURE_CLIENT_SECRET != '' && env.AZURE_ENDPOINT != '' && env.AZURE_ACCOUNT_NAME != '' && env.AZURE_CERTIFICATE_PROFILE_NAME != '' && env.AZURE_TIMESTAMP_URL != ''}}
         uses: azure/trusted-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
@@ -484,7 +487,7 @@ jobs:
           timestamp-digest: SHA256
           
       - name: Azure Trusted Signing
-        if:   ${{ secrets.azure-tenant-id != '' && secrets.azure-client-id != '' && secrets.azure-client-secret != '' && secrets.azure-endpoint != '' && secrets.azure-account-name != '' && secrets.azure-certificate-profile-name != '' && secrets.azure-timestamp-url != '' }}
+        if: ${{ env.AZURE_TENANT_ID != '' && env.AZURE_CLIENT_ID != '' && env.AZURE_CLIENT_SECRET != '' && env.AZURE_ENDPOINT != '' && env.AZURE_ACCOUNT_NAME != '' && env.AZURE_CERTIFICATE_PROFILE_NAME != '' && env.AZURE_TIMESTAMP_URL != ''}}
         uses: azure/trusted-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
