@@ -462,7 +462,7 @@ jobs:
           }
 
       - name: Azure Trusted Signing (with timestamp)
-        if: ${{ env.AZURE_TIMESTAMP_URL != '' }}
+        if:   ${{ secrets.azure-tenant-id != '' && secrets.azure-client-id != '' && secrets.azure-client-secret != '' && secrets.azure-endpoint != '' && secrets.azure-account-name != '' && secrets.azure-certificate-profile-name != '' && secrets.azure-timestamp-url != '' }}
         uses: azure/trusted-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
@@ -484,7 +484,7 @@ jobs:
           timestamp-digest: SHA256
           
       - name: Azure Trusted Signing
-        if: ${{ env.AZURE_TIMESTAMP_URL == '' }}
+        if:   ${{ secrets.azure-tenant-id != '' && secrets.azure-client-id != '' && secrets.azure-client-secret != '' && secrets.azure-endpoint != '' && secrets.azure-account-name != '' && secrets.azure-certificate-profile-name != '' && secrets.azure-timestamp-url != '' }}
         uses: azure/trusted-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
@@ -501,6 +501,13 @@ jobs:
           files-folder-recurse: true
 
           file-digest: SHA256
+
+      - name: Azure signing disabled
+        if:   ${{ secrets.azure-tenant-id != '' && secrets.azure-client-id != '' && secrets.azure-client-secret != '' && secrets.azure-endpoint != '' && secrets.azure-account-name != '' && secrets.azure-certificate-profile-name != '' && secrets.azure-timestamp-url != '' }}
+
+        shell: pwsh
+        run: |
+           Write-Host "Azure Trusted Signing is disabled because one or more required Azure secrets were not provided."
 
 
       - name: Collect Windows packages
