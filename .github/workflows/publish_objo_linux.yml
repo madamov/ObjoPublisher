@@ -24,7 +24,6 @@ on:
         required: true
         type: string
 
-
       targets:
         description: Linux targets to publish, comma separated
         required: false
