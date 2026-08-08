@@ -24,6 +24,16 @@ on:
         required: true
         type: string
 
+      sftp-url:
+        description: Base SFTP URL for artifact upload
+        required: true
+        type: string
+
+      fail-on-sftp-error:
+        description: Exit with code 2 if SFTP upload fails
+        required: false
+        type: boolean
+        default: false
 
       targets:
         description: Linux targets to publish, comma separated
@@ -44,7 +54,14 @@ on:
         default: ""
 
     secrets:
+
       objo-license:
+        required: true
+
+      sftp-username:
+        required: true
+
+      sftp-password:
         required: true
 
 jobs:
@@ -376,4 +393,143 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ${{ env.OUTPUT_DIRECTORY }}/artifacts/*
           if-no-files-found: error
+
+
+      - name: Upload Linux artifacts to SFTP
+        shell: bash
+        env:
+          SFTP_BASE_URL: ${{ inputs.sftp-url }}
+          SFTP_USER: ${{ secrets.sftp-username }}
+          SFTP_PASSWORD: ${{ secrets.sftp-password }}
+          FAIL_ON_SFTP_ERROR: ${{ inputs.fail-on-sftp-error }}
+
+        run: |
+          set -uo pipefail
+
+          ARTIFACT_DIR="$OUTPUT_DIRECTORY/artifacts"
+
+          upload_to_sftp() (
+            set -euo pipefail
+
+            echo "Preparing SFTP upload..."
+
+            if [[ "$SFTP_BASE_URL" != sftp://* ]]; then
+              echo "SFTP URL must start with sftp://." >&2
+              exit 1
+            fi
+
+            if [[ -z "$SFTP_USER" ]]; then
+              echo "SFTP username cannot be empty." >&2
+              exit 1
+            fi
+
+            if [[ -z "$SFTP_PASSWORD" ]]; then
+              echo "SFTP password cannot be empty." >&2
+              exit 1
+            fi
+
+            if [[ ! -d "$ARTIFACT_DIR" ]]; then
+              echo "Artifact directory was not found:" >&2
+              echo "  $ARTIFACT_DIR" >&2
+              exit 1
+            fi
+
+            echo "Installed curl version:"
+            curl --version
+
+            protocols="$(
+              curl --version |
+                awk '
+                  /^Protocols:/ {
+                    for (i = 2; i <= NF; i++) {
+                      print $i
+                    }
+                  }
+                '
+            )"
+
+            if ! grep -qx "sftp" <<< "$protocols"; then
+              echo "The installed curl does not support SFTP." >&2
+              echo "Supported protocols:" >&2
+              printf '  %s\n' $protocols >&2
+              exit 1
+            fi
+
+            #
+            # Extract hostname from the SFTP URL and add it
+            # to known_hosts.
+            #
+            SFTP_HOST="$(
+              printf '%s' "$SFTP_BASE_URL" |
+                sed -E 's#^sftp://([^/@]+@)?([^/:]+)(:[0-9]+)?/?.*$#\2#'
+            )"
+
+            if [[ -z "$SFTP_HOST" ]]; then
+              echo "Could not extract the host from SFTP URL." >&2
+              exit 1
+            fi
+
+            echo "Adding SSH host key for $SFTP_HOST"
+
+            mkdir -p "$HOME/.ssh"
+            chmod 700 "$HOME/.ssh"
+
+            ssh-keyscan -H "$SFTP_HOST" >> "$HOME/.ssh/known_hosts"
+
+            chmod 600 "$HOME/.ssh/known_hosts"
+
+            mapfile -d '' files < <(
+              find "$ARTIFACT_DIR" \
+                -maxdepth 1 \
+                -type f \
+                -print0
+            )
+
+            if (( ${#files[@]} == 0 )); then
+              echo "No files were found to upload." >&2
+              exit 1
+            fi
+
+            SFTP_DESTINATION="${SFTP_BASE_URL%/}/linux/"
+
+            echo "Uploading ${#files[@]} file(s) to:"
+            echo "  $SFTP_DESTINATION"
+
+            for file in "${files[@]}"; do
+              filename="$(basename "$file")"
+
+              echo "Uploading: $filename"
+
+              curl \
+                --fail \
+                --show-error \
+                --silent \
+                --ftp-create-dirs \
+                --user "$SFTP_USER:$SFTP_PASSWORD" \
+                --upload-file "$file" \
+                "${SFTP_DESTINATION}${filename}"
+            done
+
+            echo "Linux artifacts uploaded successfully."
+          )
+
+          if upload_to_sftp; then
+            echo "SFTP upload completed successfully."
+            exit 0
+          fi
+
+          upload_exit_code=$?
+
+          echo "::warning::Linux build succeeded, but SFTP upload failed."
+          echo "SFTP upload command returned exit code $upload_exit_code."
+
+          if [[ "$FAIL_ON_SFTP_ERROR" == "true" ]]; then
+            echo "fail-on-sftp-error is TRUE."
+            echo "Exiting workflow with code 2."
+            exit 2
+          fi
+
+          echo "fail-on-sftp-error is FALSE."
+          echo "Ignoring SFTP upload failure."
+          exit 0
           
