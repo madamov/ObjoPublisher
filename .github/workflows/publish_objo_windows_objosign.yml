@@ -51,6 +51,23 @@ on:
         type: string
         default: ""
 
+      sftp-url:
+        description: Base SFTP URL for artifact upload
+        required: false
+        type: string
+        default: ""
+
+      fail-on-sftp-error:
+        description: Exit with code 2 if SFTP upload fails
+        required: false
+        type: boolean
+        default: false
+
+    outputs:
+      sftp-upload:
+        description: Result of SFTP upload
+        value: ${{ jobs.publish-windows.outputs.sftp-upload }}
+
     secrets:
       objo-license:
         required: true
@@ -69,11 +86,20 @@ on:
     
       azure-timestamp-url:
         required: false
-        
+
+      sftp-username:
+        required: false
+
+      sftp-password:
+        required: false
+
 jobs:
   publish-windows:
     name: Publish and sign Windows application
     runs-on: windows-latest
+
+    outputs:
+      sftp-upload: ${{ steps.sftp-result.outputs.result }}
 
     env:
       SOLUTION_FILE: ${{ inputs.solution-file }}
@@ -420,6 +446,7 @@ jobs:
           jq '.Metadata.Signing.Windows' "$PROJECT_FILE"
 
       - name: Publish Windows application
+        id: publish
         shell: pwsh
         env:
           PUBLISH_TARGETS: ${{ inputs.targets }}
@@ -589,3 +616,391 @@ jobs:
           name: ${{ inputs.artifact-name }}
           path: ${{ env.OUTPUT_DIRECTORY }}\artifacts\*.msix
           if-no-files-found: error
+
+      - name: Determine whether SFTP upload is enabled
+        id: sftp-enabled
+        shell: pwsh
+        env:
+          SFTP_URL: ${{ inputs.sftp-url }}
+          SFTP_USER: ${{ secrets.sftp-username }}
+          SFTP_PASSWORD: ${{ secrets.sftp-password }}
+        run: |
+          $enabled =
+            -not [string]::IsNullOrWhiteSpace($env:SFTP_URL) -and
+            -not [string]::IsNullOrWhiteSpace($env:SFTP_USER) -and
+            -not [string]::IsNullOrWhiteSpace($env:SFTP_PASSWORD)
+
+          if ($enabled) {
+            "enabled=true" >> $env:GITHUB_OUTPUT
+            Write-Host "SFTP upload is enabled."
+          }
+          else {
+            "enabled=false" >> $env:GITHUB_OUTPUT
+            Write-Host "SFTP upload is disabled."
+
+            if ([string]::IsNullOrWhiteSpace($env:SFTP_URL)) {
+              Write-Host "- Missing sftp-url"
+            }
+
+            if ([string]::IsNullOrWhiteSpace($env:SFTP_USER)) {
+              Write-Host "- Missing sftp-username"
+            }
+
+            if ([string]::IsNullOrWhiteSpace($env:SFTP_PASSWORD)) {
+              Write-Host "- Missing sftp-password"
+            }
+          }
+
+      - name: Find SFTP-capable curl
+        id: sftp-curl
+        if: steps.sftp-enabled.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $candidates = @(
+            "C:\Program Files\Git\mingw64\bin\curl.exe",
+            "C:\msys64\usr\bin\curl.exe",
+            "C:\Windows\System32\curl.exe"
+          )
+
+          $selectedCurl = $null
+
+          foreach ($candidate in $candidates) {
+
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+              Write-Host "Not found: $candidate"
+              continue
+            }
+
+            Write-Host ""
+            Write-Host "Checking: $candidate"
+
+            $versionOutput = & $candidate --version
+            $curlExitCode = $LASTEXITCODE
+
+            if ($curlExitCode -ne 0) {
+              Write-Warning "Could not run $candidate"
+              continue
+            }
+
+            $versionOutput | ForEach-Object {
+              Write-Host $_
+            }
+
+            $protocolLine = $versionOutput |
+              Where-Object { $_ -match "^Protocols:" } |
+              Select-Object -First 1
+
+            if ($protocolLine -match "(^|\s)sftp(\s|$)") {
+              $selectedCurl = $candidate
+              break
+            }
+
+            Write-Host "This curl does not support SFTP."
+          }
+
+          if ($selectedCurl) {
+            Write-Host ""
+            Write-Host "Selected SFTP-capable curl:"
+            Write-Host "  $selectedCurl"
+
+            "found=true" >> $env:GITHUB_OUTPUT
+            "path=$selectedCurl" >> $env:GITHUB_OUTPUT
+          }
+          else {
+            Write-Warning "No installed curl executable supports SFTP."
+
+            "found=false" >> $env:GITHUB_OUTPUT
+            "path=" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Upload Windows artifacts to SFTP
+        id: sftp
+        if: steps.sftp-enabled.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          SFTP_BASE_URL: ${{ inputs.sftp-url }}
+          SFTP_USER: ${{ secrets.sftp-username }}
+          SFTP_PASSWORD: ${{ secrets.sftp-password }}
+          SFTP_CURL: ${{ steps.sftp-curl.outputs.path }}
+          SFTP_CURL_FOUND: ${{ steps.sftp-curl.outputs.found }}
+          FAIL_ON_SFTP_ERROR: ${{ inputs.fail-on-sftp-error }}
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          $artifactDirectory = Join-Path `
+            $env:OUTPUT_DIRECTORY `
+            "artifacts"
+
+          $uploadFailed = $false
+          $uploadError = ""
+
+          #
+          # Validate curl.
+          #
+
+          if ($env:SFTP_CURL_FOUND -ne "true" -or
+              [string]::IsNullOrWhiteSpace($env:SFTP_CURL)) {
+
+            $uploadFailed = $true
+            $uploadError = "No installed curl executable supports SFTP."
+          }
+
+          elseif (-not (
+            Test-Path `
+              -LiteralPath $env:SFTP_CURL `
+              -PathType Leaf
+          )) {
+            $uploadFailed = $true
+            $uploadError = "Selected curl was not found: $env:SFTP_CURL"
+          }
+
+          #
+          # Validate SFTP URL.
+          #
+
+          elseif (-not $env:SFTP_BASE_URL.StartsWith("sftp://")) {
+            $uploadFailed = $true
+            $uploadError = "sftp-url must start with sftp://."
+          }
+
+          #
+          # Validate artifact directory.
+          #
+
+          elseif (-not (
+            Test-Path `
+              -LiteralPath $artifactDirectory `
+              -PathType Container
+          )) {
+            $uploadFailed = $true
+            $uploadError = `
+              "Artifact directory was not found: $artifactDirectory"
+          }
+
+          if (-not $uploadFailed) {
+
+            Write-Host "Using curl:"
+            Write-Host "  $env:SFTP_CURL"
+            Write-Host ""
+
+            & $env:SFTP_CURL --version
+
+            if ($LASTEXITCODE -ne 0) {
+              $uploadFailed = $true
+              $uploadError = `
+                "Failed to run selected curl executable."
+            }
+          }
+
+          #
+          # Find files.
+          #
+
+          if (-not $uploadFailed) {
+
+            $files = @(
+              Get-ChildItem `
+                -LiteralPath $artifactDirectory `
+                -File
+            )
+
+            if ($files.Count -eq 0) {
+              $uploadFailed = $true
+              $uploadError = `
+                "No Windows artifact files were found to upload."
+            }
+          }
+
+          #
+          # Upload.
+          #
+
+          if (-not $uploadFailed) {
+
+            $destination = `
+              "$($env:SFTP_BASE_URL.TrimEnd('/'))/windows/"
+
+            Write-Host ""
+            Write-Host "Uploading $($files.Count) file(s) to:"
+            Write-Host "  $destination"
+
+            foreach ($file in $files) {
+
+              $escapedFilename = `
+                [System.Uri]::EscapeDataString($file.Name)
+
+              $remoteUrl = "$destination$escapedFilename"
+
+              Write-Host ""
+              Write-Host "Uploading: $($file.Name)"
+
+              & $env:SFTP_CURL `
+                --fail `
+                --show-error `
+                --silent `
+                --insecure `
+                --ftp-create-dirs `
+                --user "${env:SFTP_USER}:${env:SFTP_PASSWORD}" `
+                --upload-file $file.FullName `
+                $remoteUrl
+
+              $curlExitCode = $LASTEXITCODE
+
+              if ($curlExitCode -ne 0) {
+                $uploadFailed = $true
+                $uploadError = `
+                  "Upload failed for $($file.Name), curl exit code $curlExitCode."
+                break
+              }
+            }
+          }
+
+          #
+          # Set result and correct workflow exit code.
+          #
+
+          if (-not $uploadFailed) {
+
+            "result=success" >> $env:GITHUB_OUTPUT
+
+            Write-Host ""
+            Write-Host "Windows artifacts uploaded successfully."
+
+            exit 0
+          }
+
+          "result=failed" >> $env:GITHUB_OUTPUT
+
+          Write-Warning `
+            "Windows build succeeded, but SFTP upload failed."
+
+          Write-Warning $uploadError
+
+          if ($env:FAIL_ON_SFTP_ERROR -eq "true") {
+            Write-Host ""
+            Write-Host "fail-on-sftp-error is TRUE."
+            Write-Host "Exiting with code 2."
+
+            exit 2
+          }
+
+          Write-Host ""
+          Write-Host "fail-on-sftp-error is FALSE."
+          Write-Host "Ignoring SFTP upload failure."
+
+          exit 0
+
+      - name: Finalize SFTP result
+        id: sftp-result
+        if: always()
+        shell: pwsh
+        run: |
+          $enabled = "${{ steps.sftp-enabled.outputs.enabled }}"
+          $result = "${{ steps.sftp.outputs.result }}"
+
+          if ($enabled -ne "true") {
+            $result = "skipped"
+          }
+          elseif ([string]::IsNullOrWhiteSpace($result)) {
+            $result = "failed"
+          }
+
+          "result=$result" >> $env:GITHUB_OUTPUT
+
+          Write-Host "Final SFTP result: $result"
+
+      - name: Workflow summary
+        if: always()
+        shell: pwsh
+        run: |
+          $buildResult = "${{ steps.publish.outcome }}"
+          $sftpResult = "${{ steps.sftp-result.outputs.result }}"
+
+          if ([string]::IsNullOrWhiteSpace($buildResult)) {
+            $buildResult = "not-run"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($sftpResult)) {
+            $sftpResult = "skipped"
+          }
+
+          @"
+          # Objo Windows Publish Summary
+
+          | Item | Result |
+          |---|---|
+          | Application | ``${{ inputs.application-name }}`` |
+          | Targets | ``${{ inputs.targets }}`` |
+          | Artifact | ``${{ inputs.artifact-name }}`` |
+          | Build | **$buildResult** |
+          | SFTP upload | **$sftpResult** |
+
+          "@ | Out-File `
+            -FilePath $env:GITHUB_STEP_SUMMARY `
+            -Encoding utf8 `
+            -Append
+
+          if ($buildResult -eq "success") {
+            "✅ Windows application published successfully." |
+              Out-File `
+                -FilePath $env:GITHUB_STEP_SUMMARY `
+                -Encoding utf8 `
+                -Append
+          }
+          elseif ($buildResult -eq "failure") {
+            "❌ Windows application build failed." |
+              Out-File `
+                -FilePath $env:GITHUB_STEP_SUMMARY `
+                -Encoding utf8 `
+                -Append
+          }
+
+          "" |
+            Out-File `
+              -FilePath $env:GITHUB_STEP_SUMMARY `
+              -Encoding utf8 `
+              -Append
+
+          switch ($sftpResult) {
+
+            "success" {
+              "✅ Windows artifacts uploaded to the SFTP server." |
+                Out-File `
+                  -FilePath $env:GITHUB_STEP_SUMMARY `
+                  -Encoding utf8 `
+                  -Append
+            }
+
+            "failed" {
+              if ("${{ inputs.fail-on-sftp-error }}" -eq "true") {
+
+                @"
+          ❌ SFTP upload failed and ``fail-on-sftp-error`` is enabled.
+
+          **Workflow exit code: 2**
+          "@ |
+                  Out-File `
+                    -FilePath $env:GITHUB_STEP_SUMMARY `
+                    -Encoding utf8 `
+                    -Append
+              }
+              else {
+                "⚠️ SFTP upload failed, but the failure was ignored." |
+                  Out-File `
+                    -FilePath $env:GITHUB_STEP_SUMMARY `
+                    -Encoding utf8 `
+                    -Append
+              }
+            }
+
+            "skipped" {
+              "➖ SFTP upload was not performed." |
+                Out-File `
+                  -FilePath $env:GITHUB_STEP_SUMMARY `
+                  -Encoding utf8 `
+                  -Append
+            }
+          }
+
