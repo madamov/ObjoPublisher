@@ -749,7 +749,7 @@ jobs:
 
               echo "Uploading: $filename"
 
-              "CURL_BIN" \
+              "$CURL_BIN" \
                 --fail \
                 --show-error \
                 --silent \
