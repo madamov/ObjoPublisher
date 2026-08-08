@@ -96,7 +96,6 @@ on:
 jobs:
   publish-macos:
     name: Publish macOS application
-    id: publish
     runs-on: macos-latest
 
     outputs:
@@ -473,6 +472,7 @@ jobs:
             --key-file "$LICENSE_FILE"
 
       - name: Publish macOS application
+        id: publish
         shell: bash
         env:
           PUBLISH_TARGETS: ${{ inputs.targets }}
