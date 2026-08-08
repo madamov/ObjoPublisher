@@ -821,6 +821,7 @@ jobs:
                 --fail `
                 --show-error `
                 --silent `
+                --insecure `
                 --ftp-create-dirs `
                 --user "${env:SFTP_USER}:${env:SFTP_PASSWORD}" `
                 --upload-file $file.FullName `
