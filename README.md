@@ -30,6 +30,46 @@ Using reusable workflows has several advantages:
 
 All reusable workflows share the same design principles.
 
+## Optional SFTP upload
+
+The macOS, Linux, and Windows publishing workflows can optionally upload generated artifacts to an SFTP server after the normal GitHub artifact upload succeeds.
+
+SFTP upload is enabled only when all three values are supplied:
+
+- `sftp-url`
+- `sftp-username`
+- `sftp-password`
+
+If any of them is missing or empty, SFTP upload is skipped and publishing continues normally.
+
+The workflows upload files into a platform-specific subdirectory below `sftp-url`:
+
+| Platform | Destination |
+|----------|-------------|
+| macOS | `<sftp-url>/macos/` |
+| Linux | `<sftp-url>/linux/` |
+| Windows | `<sftp-url>/windows/` |
+
+The `fail-on-sftp-error` boolean input controls what happens when the application build succeeds but SFTP upload fails.
+
+| Build | SFTP upload | `fail-on-sftp-error` | Result |
+|-------|-------------|----------------------|--------|
+| success | success | either | exit code `0` |
+| failure | not attempted | either | exit code `1` |
+| success | failed | `true` | exit code `2` |
+| success | failed | `false` | exit code `0` |
+| success | skipped | either | exit code `0` |
+
+Each reusable workflow exposes an `sftp-upload` workflow output with one of these values:
+
+- `success`
+- `failed`
+- `skipped`
+
+The workflows also write a summary to the GitHub Actions workflow summary showing the build and SFTP results.
+
+---
+
 ## Automatic Objo Studio installation
 
 If the requested version of Objo Studio is already cached on the GitHub runner, it is restored immediately.
@@ -144,6 +184,8 @@ Depending on the available secrets, the workflow can produce either:
 
 Apple code signing is **optional**. If the Apple signing secrets are not supplied, the workflow automatically skips all signing and notarization steps and produces unsigned DMG files.
 
+Generated DMG files can also be uploaded to an SFTP server when SFTP parameters are supplied.
+
 ---
 
 ## Publishing process
@@ -182,10 +224,17 @@ Publish application
 Collect DMG files
         │
         ▼
-Upload artifacts
+Upload GitHub artifact
+        │
+        ▼
+(Optional)
+Upload DMG files to SFTP
         │
         ▼
 Deactivate license
+        │
+        ▼
+Write workflow summary
 ```
 
 ---
@@ -202,6 +251,8 @@ Deactivate license
 | `artifact-name` | | `objo-macos-publish` | Uploaded artifact name. |
 | `apple-notary-profile` | | `objo-notarization` | Name of the temporary notarytool profile. |
 | `objo-version` | | latest | Specific Objo Studio version to use. |
+| `sftp-url` | | empty | Base SFTP URL. SFTP upload is skipped when this or either SFTP credential is missing. |
+| `fail-on-sftp-error` | | `false` | Exit with code `2` when build succeeds but SFTP upload fails. |
 
 ---
 
@@ -213,7 +264,7 @@ Deactivate license
 |---------|-------------|
 | `objo-license` | Objo Studio license key. |
 
-### Optional
+### Optional Apple signing secrets
 
 If every Apple signing secret below is supplied, the application is signed and notarized.
 
@@ -227,6 +278,15 @@ If one or more are omitted, publishing continues without signing.
 | `apple-team-id` | Apple Developer Team ID. |
 | `apple-id` | Apple Developer account email address. |
 | `apple-app-specific-password` | App-specific password used by `notarytool`. |
+
+### Optional SFTP secrets
+
+| Secret | Description |
+|---------|-------------|
+| `sftp-username` | Username used to authenticate to the SFTP server. |
+| `sftp-password` | Password used to authenticate to the SFTP server. |
+
+Both credentials and `sftp-url` must be supplied for SFTP upload to run.
 
 ---
 
@@ -303,6 +363,32 @@ targets: osx-arm64
 
 only the Apple Silicon DMG is uploaded.
 
+When SFTP is configured, the same collected DMG files are uploaded to:
+
+```text
+<sftp-url>/macos/
+```
+
+---
+
+## SFTP workflow output
+
+The reusable workflow exposes:
+
+```yaml
+${{ needs.publish.outputs.sftp-upload }}
+```
+
+when called from a job named `publish`.
+
+Possible values are:
+
+```text
+success
+failed
+skipped
+```
+
 ---
 
 ## Example
@@ -316,26 +402,31 @@ jobs:
       solution-file: MyGreatApp.objosln
       project-file: Projects/MyGreatApp/project.json
       application-name: MyGreatApp
-
       output-directory: Publish
-
       targets: "osx-arm64, osx-x64"
-
       artifact-name: mygreatapp-macos
 
       # Optional
       # objo-version: "26.7.1"
 
+      # Optional SFTP upload
+      sftp-url: ${{ vars.SFTP_SERVER_URL }}
+      fail-on-sftp-error: true
+
     secrets:
       objo-license: ${{ secrets.OBJO_LICENSE }}
 
+      # Optional Apple signing
       apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}
       apple-certificate-name: ${{ secrets.APPLE_CERTIFICATE_NAME }}
       apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-
       apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
       apple-id: ${{ secrets.APPLE_ID }}
       apple-app-specific-password: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+
+      # Optional SFTP upload
+      sftp-username: ${{ secrets.BINARIES_USER }}
+      sftp-password: ${{ secrets.BINARIES_PASSWORD }}
 ```
 
 ---
@@ -347,6 +438,9 @@ jobs:
 - The Objo Studio license is always deactivated before the workflow finishes.
 - The downloaded Objo Studio installation is cached by version.
 - If Apple signing is disabled, the workflow still produces valid unsigned DMG files.
+- SFTP upload is skipped unless `sftp-url`, `sftp-username`, and `sftp-password` are all supplied.
+- SFTP artifacts are uploaded under `<sftp-url>/macos/`.
+- The workflow writes a GitHub Actions summary and exposes the `sftp-upload` output.
 
 ---
 
@@ -354,7 +448,7 @@ jobs:
 
 Publishes one or more Linux applications created with Objo Studio.
 
-The workflow restores or downloads the requested Objo Studio version, activates an Objo Studio license, publishes the application for one or more Linux runtime identifiers, collects the generated archives, uploads them as workflow artifacts, and finally deactivates the license.
+The workflow restores or downloads the requested Objo Studio version, activates an Objo Studio license, publishes the application for one or more Linux runtime identifiers, collects the generated archives, uploads them as workflow artifacts, optionally uploads them to SFTP, and finally deactivates the license.
 
 Unlike the macOS and Windows workflows, Linux publishing does not require any platform-specific signing.
 
@@ -384,10 +478,17 @@ Publish application
 Collect Linux archives
         │
         ▼
-Upload artifacts
+Upload GitHub artifact
+        │
+        ▼
+(Optional)
+Upload Linux archives to SFTP
         │
         ▼
 Deactivate license
+        │
+        ▼
+Write workflow summary
 ```
 
 ---
@@ -403,6 +504,8 @@ Deactivate license
 | `targets` | | `linux-x64` | Comma-separated list of Linux runtime identifiers. |
 | `artifact-name` | | `objo-linux-publish` | Uploaded artifact name. |
 | `objo-version` | | latest | Specific Objo Studio version to use. |
+| `sftp-url` | | empty | Base SFTP URL. SFTP upload is skipped when this or either SFTP credential is missing. |
+| `fail-on-sftp-error` | | `false` | Exit with code `2` when build succeeds but SFTP upload fails. |
 
 ---
 
@@ -411,8 +514,10 @@ Deactivate license
 | Secret | Required | Description |
 |---------|:-------:|-------------|
 | `objo-license` | ✔ | Objo Studio license key used during publishing. |
+| `sftp-username` | | Optional SFTP username. |
+| `sftp-password` | | Optional SFTP password. |
 
-No additional secrets are required.
+SFTP upload runs only when `sftp-url`, `sftp-username`, and `sftp-password` are all supplied.
 
 ---
 
@@ -489,6 +594,34 @@ MyGreatApp-linux-x64.tar.gz
 MyGreatApp-linux-arm64.tar.gz
 ```
 
+When SFTP is configured, the collected artifacts are also uploaded to:
+
+```text
+<sftp-url>/linux/
+```
+
+---
+
+## SFTP workflow output
+
+The reusable workflow exposes the `sftp-upload` output.
+
+Possible values are:
+
+```text
+success
+failed
+skipped
+```
+
+A calling workflow can read it using:
+
+```yaml
+${{ needs.publish.outputs.sftp-upload }}
+```
+
+when the reusable workflow job is named `publish`.
+
 ---
 
 ## Example
@@ -502,18 +635,23 @@ jobs:
       solution-file: MyGreatApp.objosln
       project-file: Projects/MyGreatApp/project.json
       application-name: MyGreatApp
-
       output-directory: Publish
-
       targets: "linux-x64"
-
       artifact-name: mygreatapp-linux
 
       # Optional
       # objo-version: "26.7.1"
 
+      # Optional SFTP upload
+      sftp-url: ${{ vars.SFTP_SERVER_URL }}
+      fail-on-sftp-error: true
+
     secrets:
       objo-license: ${{ secrets.OBJO_LICENSE }}
+
+      # Optional SFTP upload
+      sftp-username: ${{ secrets.BINARIES_USER }}
+      sftp-password: ${{ secrets.BINARIES_PASSWORD }}
 ```
 
 ---
@@ -526,6 +664,9 @@ jobs:
 - The downloaded Objo Studio installation is cached by version.
 - The Objo Studio license is automatically deactivated even if publishing fails.
 - Every generated Linux archive is collected and uploaded automatically.
+- SFTP upload is skipped unless all three SFTP values are supplied.
+- SFTP artifacts are uploaded under `<sftp-url>/linux/`.
+- The workflow writes a GitHub Actions summary and exposes the `sftp-upload` output.
 
 ---
 
@@ -540,6 +681,8 @@ azure/trusted-signing-action@v0
 In this workflow, Objo Studio is responsible only for generating the MSIX packages. The Azure signing fields in `project.json` are cleared so that Objo does not attempt to invoke `signtool.exe` itself.
 
 After publishing finishes, the reusable workflow signs all generated MSIX files using the Azure Trusted Signing action.
+
+Generated MSIX files can optionally be uploaded to an SFTP server.
 
 ---
 
@@ -577,7 +720,14 @@ azure/trusted-signing-action
 Collect signed MSIX packages
         │
         ▼
-Upload artifacts
+Upload GitHub artifact
+        │
+        ▼
+(Optional)
+Upload MSIX packages to SFTP
+        │
+        ▼
+Write workflow summary
 ```
 
 ---
@@ -594,6 +744,8 @@ Upload artifacts
 | `artifact-name` | | `objo-windows-publish` | Uploaded artifact name. |
 | `objo-version` | | latest | Specific Objo Studio version to use. |
 | `azure-correlation-id` | | generated | Optional Azure signing correlation ID. When omitted, a value based on the application name and GitHub run ID is generated. |
+| `sftp-url` | | empty | Base SFTP URL. SFTP upload is skipped when this or either SFTP credential is missing. |
+| `fail-on-sftp-error` | | `false` | Exit with code `2` when build succeeds but SFTP upload fails. |
 
 ---
 
@@ -610,6 +762,10 @@ Upload artifacts
 | `azure-certificate-profile-name` | ✔ | Trusted Signing certificate profile name. |
 | `azure-package-publisher` | ✔ | Publisher value written into the MSIX manifest. It must match the publisher identity used by the signing certificate profile. |
 | `azure-timestamp-url` | | Optional RFC 3161 timestamp server URL. When omitted, the signing action runs without timestamping. |
+| `sftp-username` | | Optional SFTP username. |
+| `sftp-password` | | Optional SFTP password. |
+
+SFTP upload runs only when `sftp-url`, `sftp-username`, and `sftp-password` are all supplied.
 
 ---
 
@@ -762,6 +918,36 @@ com.objo.app.mygreatapp_1.1.0.0_arm64.msix
 
 If multiple packages have the same filename, the workflow adds information from the parent directory to prevent overwriting.
 
+When SFTP is configured, the collected packages are also uploaded to:
+
+```text
+<sftp-url>/windows/
+```
+
+The workflow prefers an SFTP-capable `curl.exe` installed with Git for Windows and verifies SFTP support before upload.
+
+---
+
+## SFTP workflow output
+
+The reusable workflow exposes the `sftp-upload` output.
+
+Possible values are:
+
+```text
+success
+failed
+skipped
+```
+
+A calling workflow can read it using:
+
+```yaml
+${{ needs.publish-windows.outputs.sftp-upload }}
+```
+
+when the reusable workflow job is named `publish-windows`.
+
 ---
 
 ## Example
@@ -780,7 +966,6 @@ jobs:
       solution-file: MyGreatApp.objosln
       project-file: Projects/MyGreatApp/project.json
       application-name: MyGreatApp
-
       output-directory: Publish
       targets: "win-x64"
       artifact-name: mygreatapp-windows
@@ -788,6 +973,10 @@ jobs:
       # Optional
       # objo-version: "26.7.1"
       # azure-correlation-id: "MyGreatApp-${{ github.run_id }}"
+
+      # Optional SFTP upload
+      sftp-url: ${{ vars.SFTP_SERVER_URL }}
+      fail-on-sftp-error: true
 
     secrets:
       objo-license: ${{ secrets.OBJO_LICENSE }}
@@ -803,6 +992,10 @@ jobs:
 
       # Optional
       azure-timestamp-url: ${{ secrets.AZURE_TIMESTAMPURL }}
+
+      # Optional SFTP upload
+      sftp-username: ${{ secrets.BINARIES_USER }}
+      sftp-password: ${{ secrets.BINARIES_PASSWORD }}
 ```
 
 ---
@@ -817,6 +1010,9 @@ jobs:
 - Multiple Windows targets are supported in one run.
 - Objo Studio is cached by version.
 - Timestamping is optional.
+- SFTP upload is skipped unless all three SFTP values are supplied.
+- SFTP artifacts are uploaded under `<sftp-url>/windows/`.
+- The workflow writes a GitHub Actions summary and exposes the `sftp-upload` output.
 
 ---
 
@@ -1080,11 +1276,8 @@ jobs:
       solution-file: MyGreatApp.objosln
       project-file: Projects/MyGreatApp/project.json
       application-name: MyGreatApp
-
       output-directory: Publish
-
       targets: "win-x64"
-
       artifact-name: mygreatapp-windows
 
       # Optional
@@ -1130,4 +1323,3 @@ jobs:
 - Objo Studio is cached by version.
 - Multiple Windows runtime identifiers are supported.
 - Timestamping is optional.
-
