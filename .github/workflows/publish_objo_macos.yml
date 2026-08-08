@@ -48,6 +48,23 @@ on:
         type: string
         default: ""
 
+      sftp-url:
+        description: Base SFTP URL for artifact upload
+        required: false
+        type: string
+        default: ""
+
+      fail-on-sftp-error:
+        description: Exit with code 2 if SFTP upload fails
+        required: false
+        type: boolean
+        default: false
+
+    outputs:
+      sftp-upload:
+        description: Result of SFTP upload
+        value: ${{ jobs.publish-macos.outputs.sftp-upload }}
+
     secrets:
       apple-certificate:
         required: true
@@ -70,11 +87,20 @@ on:
       objo-license:
         required: true
 
+      sftp-username:
+        required: false
+
+      sftp-password:
+        required: false
 
 jobs:
   publish-macos:
     name: Publish macOS application
+    id: publish
     runs-on: macos-latest
+
+    outputs:
+      sftp-upload: ${{ steps.sftp-result.outputs.result }}
 
     env:
       APPLE_CERTIFICATE: ${{ secrets.apple-certificate }}
@@ -572,3 +598,267 @@ jobs:
 
           security delete-keychain \
             "$APPLE_KEYCHAIN_PATH" || true
+
+      - name: Determine whether SFTP upload is enabled
+        id: sftp-enabled
+        shell: bash
+        env:
+          SFTP_URL: ${{ inputs.sftp-url }}
+          SFTP_USER: ${{ secrets.sftp-username }}
+          SFTP_PASSWORD: ${{ secrets.sftp-password }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$SFTP_URL" &&
+                -n "$SFTP_USER" &&
+                -n "$SFTP_PASSWORD" ]]; then
+
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "SFTP upload is enabled."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "SFTP upload is disabled."
+
+            if [[ -z "$SFTP_URL" ]]; then
+              echo "- Missing sftp-url"
+            fi
+
+            if [[ -z "$SFTP_USER" ]]; then
+              echo "- Missing sftp-username"
+            fi
+
+            if [[ -z "$SFTP_PASSWORD" ]]; then
+              echo "- Missing sftp-password"
+            fi
+          fi
+
+      - name: Upload macOS artifacts to SFTP
+        id: sftp
+        if: steps.sftp-enabled.outputs.enabled == 'true'
+        shell: bash
+        env:
+          SFTP_BASE_URL: ${{ inputs.sftp-url }}
+          SFTP_USER: ${{ secrets.sftp-username }}
+          SFTP_PASSWORD: ${{ secrets.sftp-password }}
+          FAIL_ON_SFTP_ERROR: ${{ inputs.fail-on-sftp-error }}
+        run: |
+          set -uo pipefail
+
+          ARTIFACT_DIR="$OUTPUT_DIRECTORY/artifacts"
+
+          upload_to_sftp() (
+            set -euo pipefail
+
+            if [[ "$SFTP_BASE_URL" != sftp://* ]]; then
+              echo "SFTP URL must start with sftp://." >&2
+              exit 1
+            fi
+
+            if [[ ! -d "$ARTIFACT_DIR" ]]; then
+              echo "Artifact directory was not found:" >&2
+              echo "  $ARTIFACT_DIR" >&2
+              exit 1
+            fi
+
+            echo "Installed curl version:"
+            curl --version
+
+            protocols="$(
+              curl --version |
+                awk '
+                  /^Protocols:/ {
+                    for (i = 2; i <= NF; i++) {
+                      print $i
+                    }
+                  }
+                '
+            )"
+
+            if ! grep -qx "sftp" <<< "$protocols"; then
+              echo "The installed curl does not support SFTP." >&2
+              echo "Supported protocols:" >&2
+              printf '  %s\n' $protocols >&2
+              exit 1
+            fi
+
+            SFTP_HOST="$(
+              printf '%s' "$SFTP_BASE_URL" |
+                sed -E \
+                  's#^sftp://([^/@]+@)?([^/:]+)(:[0-9]+)?/?.*$#\2#'
+            )"
+
+            if [[ -z "$SFTP_HOST" ]]; then
+              echo "Could not extract hostname from SFTP URL." >&2
+              exit 1
+            fi
+
+            mkdir -p "$HOME/.ssh"
+            chmod 700 "$HOME/.ssh"
+
+            echo "Adding SSH host key for $SFTP_HOST"
+
+            ssh-keyscan -H "$SFTP_HOST" \
+              >> "$HOME/.ssh/known_hosts"
+
+            chmod 600 "$HOME/.ssh/known_hosts"
+
+            files=()
+
+            while IFS= read -r -d '' file; do
+              files+=("$file")
+            done < <(
+              find "$ARTIFACT_DIR" \
+                -maxdepth 1 \
+                -type f \
+                -name '*.dmg' \
+                -print0
+            )
+
+            if (( ${#files[@]} == 0 )); then
+              echo "No DMG files were found to upload." >&2
+              exit 1
+            fi
+
+            SFTP_DESTINATION="${SFTP_BASE_URL%/}/macos/"
+
+            echo "Uploading ${#files[@]} file(s) to:"
+            echo "  $SFTP_DESTINATION"
+
+            for file in "${files[@]}"; do
+              filename="$(basename "$file")"
+
+              echo "Uploading: $filename"
+
+              curl \
+                --fail \
+                --show-error \
+                --silent \
+                --ftp-create-dirs \
+                --user "$SFTP_USER:$SFTP_PASSWORD" \
+                --upload-file "$file" \
+                "${SFTP_DESTINATION}${filename}"
+            done
+
+            echo "macOS artifacts uploaded successfully."
+          )
+
+          if upload_to_sftp; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+            echo "SFTP upload completed successfully."
+            exit 0
+          fi
+
+          upload_exit_code=$?
+
+          echo "result=failed" >> "$GITHUB_OUTPUT"
+
+          echo "::warning::macOS build succeeded, but SFTP upload failed."
+          echo "SFTP command exit code: $upload_exit_code"
+
+          if [[ "$FAIL_ON_SFTP_ERROR" == "true" ]]; then
+            echo "fail-on-sftp-error is TRUE."
+            echo "Exiting with code 2."
+            exit 2
+          fi
+
+          echo "fail-on-sftp-error is FALSE."
+          echo "Ignoring SFTP upload failure."
+          exit 0
+
+      - name: Finalize SFTP result
+        id: sftp-result
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.sftp-enabled.outputs.enabled }}" != "true" ]]; then
+            echo "result=skipped" >> "$GITHUB_OUTPUT"
+
+          elif [[ -n "${{ steps.sftp.outputs.result }}" ]]; then
+            echo "result=${{ steps.sftp.outputs.result }}" \
+              >> "$GITHUB_OUTPUT"
+
+          else
+            echo "result=skipped" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Remove temporary Apple keychain
+        if: always() && env.APPLE_KEYCHAIN_PATH != ''
+        shell: bash
+        run: |
+          security default-keychain \
+            -d user \
+            -s login.keychain-db || true
+
+          security list-keychains \
+            -d user \
+            -s login.keychain-db || true
+
+          security delete-keychain \
+            "$APPLE_KEYCHAIN_PATH" || true
+
+      - name: Workflow summary
+        if: always()
+        shell: bash
+        run: |
+          BUILD_RESULT="${{ steps.publish.outcome }}"
+          SFTP_RESULT="${{ steps.sftp-result.outputs.result }}"
+
+          if [[ -z "$BUILD_RESULT" ]]; then
+            BUILD_RESULT="not-run"
+          fi
+
+          if [[ -z "$SFTP_RESULT" ]]; then
+            SFTP_RESULT="skipped"
+          fi
+
+          {
+            echo "# Objo macOS Publish Summary"
+            echo
+
+            echo "| Item | Result |"
+            echo "|---|---|"
+            echo "| Application | \`${{ inputs.application-name }}\` |"
+            echo "| Targets | \`${{ inputs.targets }}\` |"
+            echo "| Artifact | \`${{ inputs.artifact-name }}\` |"
+            echo "| Build | **$BUILD_RESULT** |"
+            echo "| SFTP upload | **$SFTP_RESULT** |"
+            echo
+
+            case "$BUILD_RESULT" in
+              success)
+                echo "✅ macOS application published successfully."
+                ;;
+              failure)
+                echo "❌ macOS application build failed."
+                ;;
+              *)
+                echo "❌ macOS publish did not complete."
+                ;;
+            esac
+
+            echo
+
+            case "$SFTP_RESULT" in
+              success)
+                echo "✅ DMG files uploaded to the SFTP server."
+                ;;
+
+              failed)
+                if [[ "${{ inputs.fail-on-sftp-error }}" == "true" ]]; then
+                  echo "❌ SFTP upload failed and fail-on-sftp-error is enabled."
+                  echo
+                  echo "**Workflow exit code: 2**"
+                else
+                  echo "⚠️ SFTP upload failed, but the failure was ignored."
+                fi
+                ;;
+
+              skipped)
+                echo "➖ SFTP upload was not performed."
+                ;;
+
+              *)
+                echo "➖ No SFTP result was reported."
+                ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
