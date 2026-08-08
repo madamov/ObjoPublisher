@@ -24,23 +24,6 @@ on:
         type: string
         default: Publish
 
-      sftp-url:
-        description: Base SFTP URL for artifact upload
-        required: false
-        type: string
-        default: ""
-
-      fail-on-sftp-error:
-        description: Exit with code 2 if SFTP upload fails
-        required: false
-        type: boolean
-        default: false
-
-    outputs:
-      sftp-upload:
-        description: Result of SFTP upload
-        value: ${{ jobs.publish-windows.outputs.sftp-upload }}
-
       targets:
         description: Windows targets to publish, comma separated
         required: false
@@ -64,6 +47,23 @@ on:
         required: false
         type: string
         default: ""
+
+      sftp-url:
+        description: Base SFTP URL for artifact upload
+        required: false
+        type: string
+        default: ""
+
+      fail-on-sftp-error:
+        description: Exit with code 2 if SFTP upload fails
+        required: false
+        type: boolean
+        default: false
+
+    outputs:
+      sftp-upload:
+        description: Result of SFTP upload
+        value: ${{ jobs.publish-windows.outputs.sftp-upload }}
 
     secrets:
       objo-license:
@@ -105,7 +105,7 @@ jobs:
     name: Publish Windows application
     runs-on: windows-latest
 
-  outputs:
+    outputs:
       sftp-upload: ${{ steps.sftp-result.outputs.result }}
 
     env:
@@ -123,7 +123,6 @@ jobs:
       OBJO_LICENSE: ${{ secrets.objo-license }}
 
     steps:
-
       - name: Check out application repository
         uses: actions/checkout@v4
 
