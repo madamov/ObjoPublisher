@@ -26,7 +26,7 @@ on:
 
       sftp-url:
         description: Base SFTP URL for artifact upload
-        required: false
+        required: flase
         type: string
         default: ""
 
@@ -65,7 +65,9 @@ on:
         required: false
 
     outputs:
-      sftp-upload: ${{ steps.sftp-result.outputs.result }}
+      sftp-upload:
+        description: Result of SFTP upload
+        value: ${{ jobs.publish-linux.outputs.sftp-upload }}
 
 jobs:
   publish-linux:
@@ -77,7 +79,10 @@ jobs:
       PROJECT_FILE: ${{ inputs.project-file }}
       APPLICATION_NAME: ${{ inputs.application-name }}
       OBJO_LICENSE: ${{ secrets.objo-license }}
-      
+
+    outputs:
+      sftp-upload: ${{ steps.sftp-result.outputs.result }}
+
     steps:
       - name: Check out application repository
         uses: actions/checkout@v4
