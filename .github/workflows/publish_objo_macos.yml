@@ -785,21 +785,7 @@ jobs:
           echo "fail-on-sftp-error is FALSE."
           echo "Ignoring SFTP upload failure."
           exit 0
-
-          echo "result=failed" >> "$GITHUB_OUTPUT"
-
-          echo "::warning::macOS build succeeded, but SFTP upload failed."
-          echo "SFTP command exit code: $upload_exit_code"
-
-          if [[ "$FAIL_ON_SFTP_ERROR" == "true" ]]; then
-            echo "fail-on-sftp-error is TRUE."
-            echo "Exiting with code 2."
-            exit 2
-          fi
-
-          echo "fail-on-sftp-error is FALSE."
-          echo "Ignoring SFTP upload failure."
-          exit 0
+          
 
       - name: Finalize SFTP result
         id: sftp-result
