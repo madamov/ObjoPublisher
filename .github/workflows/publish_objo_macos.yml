@@ -67,22 +67,22 @@ on:
 
     secrets:
       apple-certificate:
-        required: true
+        required: false
 
       apple-certificate-name:
-        required: true
+        required: false
 
       apple-certificate-password:
-        required: true
+        required: false
 
       apple-team-id:
-        required: true
+        required: false
 
       apple-id:
-        required: true
+        required: false
 
       apple-app-specific-password:
-        required: true
+        required: false
 
       objo-license:
         required: true
