@@ -584,21 +584,6 @@ jobs:
           path: ${{ env.OUTPUT_DIRECTORY }}/artifacts/*.dmg
           if-no-files-found: error
 
-      - name: Remove temporary Apple keychain
-        if: always() && env.APPLE_KEYCHAIN_PATH != ''
-        shell: bash
-        run: |
-          security default-keychain \
-            -d user \
-            -s login.keychain-db || true
-
-          security list-keychains \
-            -d user \
-            -s login.keychain-db || true
-
-          security delete-keychain \
-            "$APPLE_KEYCHAIN_PATH" || true
-
       - name: Determine whether SFTP upload is enabled
         id: sftp-enabled
         shell: bash
@@ -632,6 +617,58 @@ jobs:
             fi
           fi
 
+      - name: Prepare curl with SFTP support
+        if: steps.sftp-enabled.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking Homebrew curl..."
+
+          if brew list --formula curl >/dev/null 2>&1; then
+            echo "Homebrew curl is already installed."
+          else
+            echo "Homebrew curl is not installed."
+            echo "Installing Homebrew curl..."
+            brew install curl
+          fi
+
+          CURL_BIN="$(brew --prefix curl)/bin/curl"
+
+          if [[ ! -x "$CURL_BIN" ]]; then
+            echo "Homebrew curl executable was not found:" >&2
+            echo "  $CURL_BIN" >&2
+            exit 1
+          fi
+
+          echo "Using curl:"
+          echo "  $CURL_BIN"
+          echo
+
+          "$CURL_BIN" --version
+
+          protocols="$(
+            "$CURL_BIN" --version |
+              awk '
+                /^Protocols:/ {
+                  for (i = 2; i <= NF; i++) {
+                    print $i
+                  }
+                }
+              '
+          )"
+
+          if ! grep -qx "sftp" <<< "$protocols"; then
+            echo "Homebrew curl does not support SFTP." >&2
+            echo "Supported protocols:" >&2
+            printf '  %s\n' $protocols >&2
+            exit 1
+          fi
+
+          echo "Homebrew curl supports SFTP."
+
+          echo "CURL_BIN=$CURL_BIN" >> "$GITHUB_ENV"
+
       - name: Upload macOS artifacts to SFTP
         id: sftp
         if: steps.sftp-enabled.outputs.enabled == 'true'
@@ -660,26 +697,9 @@ jobs:
               exit 1
             fi
 
-            echo "Installed curl version:"
-            curl --version
-
-            protocols="$(
-              curl --version |
-                awk '
-                  /^Protocols:/ {
-                    for (i = 2; i <= NF; i++) {
-                      print $i
-                    }
-                  }
-                '
-            )"
-
-            if ! grep -qx "sftp" <<< "$protocols"; then
-              echo "The installed curl does not support SFTP." >&2
-              echo "Supported protocols:" >&2
-              printf '  %s\n' $protocols >&2
-              exit 1
-            fi
+            echo "Using curl:"
+            echo "  $CURL_BIN"
+            echo
 
             SFTP_HOST="$(
               printf '%s' "$SFTP_BASE_URL" |
@@ -729,7 +749,7 @@ jobs:
 
               echo "Uploading: $filename"
 
-              curl \
+              "CURL_BIN" \
                 --fail \
                 --show-error \
                 --silent \
@@ -742,13 +762,29 @@ jobs:
             echo "macOS artifacts uploaded successfully."
           )
 
-          if upload_to_sftp; then
+          upload_to_sftp
+          upload_exit_code=$?
+
+          if (( upload_exit_code == 0 )); then
             echo "result=success" >> "$GITHUB_OUTPUT"
             echo "SFTP upload completed successfully."
             exit 0
           fi
 
-          upload_exit_code=$?
+          echo "result=failed" >> "$GITHUB_OUTPUT"
+
+          echo "::warning::macOS build succeeded, but SFTP upload failed."
+          echo "SFTP command exit code: $upload_exit_code"
+
+          if [[ "$FAIL_ON_SFTP_ERROR" == "true" ]]; then
+            echo "fail-on-sftp-error is TRUE."
+            echo "Exiting with code 2."
+            exit 2
+          fi
+
+          echo "fail-on-sftp-error is FALSE."
+          echo "Ignoring SFTP upload failure."
+          exit 0
 
           echo "result=failed" >> "$GITHUB_OUTPUT"
 
