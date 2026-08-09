@@ -696,6 +696,122 @@ jobs:
             "path=" >> $env:GITHUB_OUTPUT
           }
 
+      - name: Trust SFTP server SSH host key
+        if: steps.sftp-enabled.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          SFTP_BASE_URL: ${{ inputs.sftp-url }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (-not $env:SFTP_BASE_URL.StartsWith("sftp://")) {
+            throw "sftp-url must start with sftp://."
+          }
+
+          #
+          # Extract hostname from SFTP URL.
+          #
+          $uri = [System.Uri]$env:SFTP_BASE_URL
+          $sftpHost = $uri.Host
+          $sftpPort = $uri.Port
+
+          if ([string]::IsNullOrWhiteSpace($sftpHost)) {
+            throw "Could not extract the host from sftp-url."
+          }
+
+          if ($sftpPort -le 0) {
+            $sftpPort = 22
+          }
+
+          Write-Host "SFTP host: $sftpHost"
+          Write-Host "SFTP port: $sftpPort"
+
+          #
+          # Locate ssh-keyscan.
+          #
+          $candidates = @(
+            "C:\Program Files\Git\usr\bin\ssh-keyscan.exe",
+            "C:\Windows\System32\OpenSSH\ssh-keyscan.exe"
+          )
+
+          $sshKeyscan = $null
+
+          foreach ($candidate in $candidates) {
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+              $sshKeyscan = $candidate
+              break
+            }
+          }
+
+          if ([string]::IsNullOrWhiteSpace($sshKeyscan)) {
+            throw "Could not locate ssh-keyscan.exe."
+          }
+
+          Write-Host "Using ssh-keyscan:"
+          Write-Host "  $sshKeyscan"
+
+          #
+          # Create ~/.ssh/known_hosts.
+          #
+          $sshDirectory = Join-Path $HOME ".ssh"
+          $knownHosts = Join-Path $sshDirectory "known_hosts"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $sshDirectory `
+            -Force |
+            Out-Null
+
+          #
+          # Remove an existing entry for this host first so repeated
+          # workflow runs do not keep appending duplicates.
+          #
+          $sshKeygenCandidates = @(
+            "C:\Program Files\Git\usr\bin\ssh-keygen.exe",
+            "C:\Windows\System32\OpenSSH\ssh-keygen.exe"
+          )
+
+          $sshKeygen = $sshKeygenCandidates |
+            Where-Object {
+              Test-Path -LiteralPath $_ -PathType Leaf
+            } |
+            Select-Object -First 1
+
+          if ($sshKeygen -and (Test-Path $knownHosts)) {
+            & $sshKeygen `
+              -R $sftpHost `
+              -f $knownHosts `
+              2>$null
+
+            # ssh-keygen -R returns non-zero when there was
+            # nothing to remove, which is harmless here.
+          }
+
+          Write-Host "Adding SSH host key for $sftpHost"
+
+          $keyOutput = & $sshKeyscan `
+            -H `
+            -p $sftpPort `
+            $sftpHost
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "ssh-keyscan failed with exit code $LASTEXITCODE."
+          }
+
+          if ([string]::IsNullOrWhiteSpace(
+              ($keyOutput -join [Environment]::NewLine))) {
+            throw "ssh-keyscan did not return an SSH host key."
+          }
+
+          $keyOutput |
+            Out-File `
+              -FilePath $knownHosts `
+              -Encoding ascii `
+              -Append
+
+          Write-Host "SSH host key added to:"
+          Write-Host "  $knownHosts"
+
       - name: Upload Windows artifacts to SFTP
         id: sftp
         if: steps.sftp-enabled.outputs.enabled == 'true'

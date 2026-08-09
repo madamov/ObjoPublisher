@@ -431,7 +431,40 @@ jobs:
               echo "- Missing sftp-password"
             fi
           fi
-          
+
+      - name: Trust SFTP server SSH host key
+        if: steps.sftp-enabled.outputs.enabled == 'true'
+        shell: bash
+        env:
+          SFTP_BASE_URL: ${{ inputs.sftp-url }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$SFTP_BASE_URL" != sftp://* ]]; then
+            echo "sftp-url must start with sftp://." >&2
+            exit 1
+          fi
+
+          SFTP_HOST="$(
+            printf '%s' "$SFTP_BASE_URL" |
+              sed -E 's#^sftp://([^/@]+@)?([^/:]+)(:[0-9]+)?/.*#\2#'
+          )"
+
+          if [[ -z "$SFTP_HOST" ]]; then
+            echo "Could not extract the host from SFTP_SERVER_URL." >&2
+            exit 1
+          fi
+
+          echo "Adding SSH host key for $SFTP_HOST"
+
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+
+          ssh-keyscan -H "$SFTP_HOST" >> "$HOME/.ssh/known_hosts"
+
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+
       - name: Upload Linux artifacts to SFTP
         id: sftp
         if: steps.sftp-enabled.outputs.enabled == 'true'
