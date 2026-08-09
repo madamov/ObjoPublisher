@@ -34,13 +34,18 @@ All reusable workflows share the same design principles.
 
 The macOS, Linux, and Windows publishing workflows can optionally upload generated artifacts to an SFTP server after the normal GitHub artifact upload succeeds.
 
-SFTP upload is enabled only when all three values are supplied:
+SFTP upload is enabled only when all four values are supplied:
 
 - `sftp-url`
 - `sftp-username`
 - `sftp-password`
+- `sftp-host-fingerprint`
 
 If any of them is missing or empty, SFTP upload is skipped and publishing continues normally.
+
+Before any file is uploaded, the workflow verifies that the SSH host key presented by the SFTP server matches the expected fingerprint supplied through the `sftp-host-fingerprint` secret. This protects against connecting to an unexpected or malicious server and avoids the "trust on first use" approach commonly used with SSH. **On Windows only RSA SHA256 is accepted, version of curl in Windows runners doesn't support ECDSA or ED25519.** If you want higher security on Linux or macOS you can create two repository secrets: one for Windows holding SHA256 RSA key format, the other holding SHA256 ED25519 or ECDSA key formats, then you pass first one to Windows publishing workflow, second one to Linux and/or macOS.
+
+Only after the host key has been successfully verified is the server added to the runner's `known_hosts` file and the upload allowed to continue.
 
 The workflows upload files into a platform-specific subdirectory below `sftp-url`:
 
@@ -285,8 +290,9 @@ If one or more are omitted, publishing continues without signing.
 |---------|-------------|
 | `sftp-username` | Username used to authenticate to the SFTP server. |
 | `sftp-password` | Password used to authenticate to the SFTP server. |
+| `sftp-host-fingerprint` | Expected SHA256 (RSA, ECDSA and ED25519 are all supported) fingerprint of the SFTP server’s SSH host key. The workflow verifies the server’s identity before uploading any files. |
 
-Both credentials and `sftp-url` must be supplied for SFTP upload to run.
+Both credentials, sftp-host-fingerprint and `sftp-url` must be supplied for SFTP upload to run.
 
 ---
 
@@ -427,6 +433,7 @@ jobs:
       # Optional SFTP upload
       sftp-username: ${{ secrets.BINARIES_USER }}
       sftp-password: ${{ secrets.BINARIES_PASSWORD }}
+      sftp-host-fingerprint: ${{ secrets.SFTP_HOST_FINGERPRINT }}
 ```
 
 ---
@@ -516,8 +523,9 @@ Write workflow summary
 | `objo-license` | ✔ | Objo Studio license key used during publishing. |
 | `sftp-username` | | Optional SFTP username. |
 | `sftp-password` | | Optional SFTP password. |
+| `sftp-host-fingerprint` | Expected SHA256 (RSA, ECDSA and ED25519 are all supported) fingerprint of the SFTP server’s SSH host key. The workflow verifies the server’s identity before uploading any files. |
 
-SFTP upload runs only when `sftp-url`, `sftp-username`, and `sftp-password` are all supplied.
+Both credentials, sftp-host-fingerprint and `sftp-url` must be supplied for SFTP upload to run.
 
 ---
 
@@ -652,6 +660,7 @@ jobs:
       # Optional SFTP upload
       sftp-username: ${{ secrets.BINARIES_USER }}
       sftp-password: ${{ secrets.BINARIES_PASSWORD }}
+      sftp-host-fingerprint: ${{ secrets.SFTP_HOST_FINGERPRINT }}
 ```
 
 ---
@@ -675,7 +684,7 @@ jobs:
 Publishes one or more Windows applications created with Objo Studio and signs the generated MSIX packages using the official Azure Trusted Signing GitHub Action:
 
 ```text
-azure/trusted-signing-action@v0
+azure/trusted-signing-action@v2
 ```
 
 In this workflow, Objo Studio is responsible only for generating the MSIX packages. The Azure signing fields in `project.json` are cleared so that Objo does not attempt to invoke `signtool.exe` itself.
@@ -764,8 +773,9 @@ Write workflow summary
 | `azure-timestamp-url` | | Optional RFC 3161 timestamp server URL. When omitted, the signing action runs without timestamping. |
 | `sftp-username` | | Optional SFTP username. |
 | `sftp-password` | | Optional SFTP password. |
+| `sftp-host-fingerprint` | Expected SHA256 (** ONLY RSA IS SUPPORTED UNDER WINDOWS**) fingerprint of the SFTP server’s SSH host key. The workflow verifies the server’s identity before uploading any files. |
 
-SFTP upload runs only when `sftp-url`, `sftp-username`, and `sftp-password` are all supplied.
+Both credentials, sftp-host-fingerprint and `sftp-url` must be supplied for SFTP upload to run.
 
 ---
 
@@ -996,6 +1006,7 @@ jobs:
       # Optional SFTP upload
       sftp-username: ${{ secrets.BINARIES_USER }}
       sftp-password: ${{ secrets.BINARIES_PASSWORD }}
+      sftp-host-fingerprint: ${{ secrets.SFTP_HOST_FINGERPRINT }}
 ```
 
 ---
@@ -1100,6 +1111,11 @@ Upload artifacts
 | `azure-certificate-profile-name` | ✔ | Azure Trusted Signing certificate profile name. |
 | `azure-package-publisher` | ✔ | Publisher value written into the MSIX manifest. It must match the publisher configured in the Azure certificate profile. |
 | `azure-timestamp-url` | | Optional RFC 3161 timestamp server URL. When omitted, Objo signs without timestamping. |
+| `sftp-username` | | Optional SFTP username. |
+| `sftp-password` | | Optional SFTP password. |
+| `sftp-host-fingerprint` | Expected SHA256 (** ONLY RSA IS SUPPORTED UNDER WINDOWS**) fingerprint of the SFTP server’s SSH host key. The workflow verifies the server’s identity before uploading any files. |
+
+Both credentials, sftp-host-fingerprint and `sftp-url` must be supplied for SFTP upload to run.
 
 ---
 

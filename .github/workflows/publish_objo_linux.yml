@@ -64,6 +64,9 @@ on:
       sftp-password:
         required: false
 
+      sftp-host-fingerprint:
+        required: false
+    
     outputs:
       sftp-upload:
         description: Result of SFTP upload
@@ -431,7 +434,119 @@ jobs:
               echo "- Missing sftp-password"
             fi
           fi
+
+      - name: Verify and trust SFTP server SSH host key
+        if: steps.sftp-enabled.outputs.enabled == 'true'
+        shell: bash
+        env:
+          SFTP_BASE_URL: ${{ inputs.sftp-url }}
+          EXPECTED_FINGERPRINT: ${{ secrets.sftp-host-fingerprint }}
+        run: |
+          set -euo pipefail
+      
+          if [[ "$SFTP_BASE_URL" != sftp://* ]]; then
+            echo "sftp-url must start with sftp://." >&2
+            exit 1
+          fi
+      
+          #
+          # Strip sftp:// and everything after host[:port].
+          #
+          AUTHORITY="${SFTP_BASE_URL#sftp://}"
+          AUTHORITY="${AUTHORITY%%/*}"
+      
+          #
+          # Remove optional user@.
+          #
+          HOST_PORT="${AUTHORITY##*@}"
+      
+          SFTP_HOST="$HOST_PORT"
+          SFTP_PORT="22"
+      
+          #
+          # Handle host:port.
+          #
+          if [[ "$HOST_PORT" == *:* ]]; then
+            SFTP_HOST="${HOST_PORT%%:*}"
+            SFTP_PORT="${HOST_PORT##*:}"
+          fi
+      
+          if [[ -z "$SFTP_HOST" ]]; then
+            echo "Could not extract SFTP hostname." >&2
+            exit 1
+          fi
+      
+          echo "SFTP host: $SFTP_HOST"
+          echo "SFTP port: $SFTP_PORT"
+      
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+      
+          SCANNED_KEYS="$RUNNER_TEMP/sftp-host-keys"
+          VERIFIED_KEYS="$RUNNER_TEMP/sftp-verified-host-keys"
+      
+          rm -f "$SCANNED_KEYS" "$VERIFIED_KEYS"
+      
+          echo "Retrieving SSH host keys..."
+      
+          ssh-keyscan \
+            -p "$SFTP_PORT" \
+            "$SFTP_HOST" \
+            > "$SCANNED_KEYS"
+      
+          if [[ ! -s "$SCANNED_KEYS" ]]; then
+            echo "ssh-keyscan returned no host keys." >&2
+            exit 1
+          fi
+      
+          echo "Verifying SSH host fingerprint..."
+      
+          match_found=false
+      
+          while IFS= read -r key_line; do
+            [[ -n "$key_line" ]] || continue
+            [[ "$key_line" == \#* ]] && continue
+      
+            ACTUAL_FINGERPRINT="$(
+              printf '%s\n' "$key_line" |
+                ssh-keygen -lf - -E sha256 |
+                awk '{print $2}'
+            )"
+      
+            echo "Found host key fingerprint: $ACTUAL_FINGERPRINT"
+      
+            if [[ "$ACTUAL_FINGERPRINT" == "$EXPECTED_FINGERPRINT" ]]; then
+              printf '%s\n' "$key_line" >> "$VERIFIED_KEYS"
+              match_found=true
+            fi
+          done < "$SCANNED_KEYS"
+      
+          if [[ "$match_found" != "true" ]]; then
+            echo "SSH host key verification FAILED." >&2
+            echo "None of the server keys matched the expected fingerprint." >&2
+            exit 1
+          fi
+      
+          echo "SSH host fingerprint verified successfully."
+      
+          #
+          # Hash the verified known_hosts entries before storing them.
+          #
+          cp "$VERIFIED_KEYS" "$HOME/.ssh/known_hosts"
+      
+          ssh-keygen \
+            -H \
+            -f "$HOME/.ssh/known_hosts" \
+            >/dev/null 2>&1
+      
+          rm -f "$HOME/.ssh/known_hosts.old"
+      
+          chmod 600 "$HOME/.ssh/known_hosts"
+      
+          echo "Verified host key installed in:"
+          echo "  $HOME/.ssh/known_hosts"
           
+
       - name: Upload Linux artifacts to SFTP
         id: sftp
         if: steps.sftp-enabled.outputs.enabled == 'true'
