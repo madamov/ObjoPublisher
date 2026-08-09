@@ -119,6 +119,66 @@ jobs:
       APPLICATION_NAME: ${{ inputs.application-name }}
 
     steps:
+      - name: Validate SFTP configuration
+        id: sftp-config
+        shell: bash
+        env:
+          SFTP_URL: ${{ inputs.sftp-url }}
+          SFTP_USER: ${{ secrets.sftp-username }}
+          SFTP_PASSWORD: ${{ secrets.sftp-password }}
+          SFTP_HOST_FINGERPRINT: ${{ secrets.sftp-host-fingerprint }}
+        run: |
+          set -euo pipefail
+
+          provided=()
+          missing=()
+
+          [[ -n "$SFTP_URL" ]] \
+            && provided+=("sftp-url") \
+            || missing+=("sftp-url")
+
+          [[ -n "$SFTP_USER" ]] \
+            && provided+=("sftp-username") \
+            || missing+=("sftp-username")
+
+          [[ -n "$SFTP_PASSWORD" ]] \
+            && provided+=("sftp-password") \
+            || missing+=("sftp-password")
+
+          [[ -n "$SFTP_HOST_FINGERPRINT" ]] \
+            && provided+=("sftp-host-fingerprint") \
+            || missing+=("sftp-host-fingerprint")
+
+          if (( ${#provided[@]} == 0 )); then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "SFTP upload is disabled."
+            echo "No SFTP configuration values were supplied."
+            exit 0
+          fi
+
+          if (( ${#missing[@]} == 0 )); then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "SFTP upload is enabled."
+            echo "All required SFTP configuration values are present."
+            exit 0
+          fi
+
+          echo "::error::Incomplete SFTP configuration."
+
+          echo "Provided:"
+          for item in "${provided[@]}"; do
+            echo "  - $item"
+          done
+
+          echo "Missing:"
+          for item in "${missing[@]}"; do
+            echo "  - $item"
+          done
+
+          echo
+          echo "Either provide all SFTP configuration values or none of them." >&2
+          exit 1
+
 
       - name: Check out application repository
         uses: actions/checkout@v4
@@ -588,36 +648,8 @@ jobs:
           path: ${{ env.OUTPUT_DIRECTORY }}/artifacts/*.dmg
           if-no-files-found: error
 
-      - name: Determine whether SFTP upload is enabled
-        id: sftp-enabled
-        shell: bash
-        env:
-          SFTP_URL: ${{ inputs.sftp-url }}
-          SFTP_USER: ${{ secrets.sftp-username }}
-          SFTP_PASSWORD: ${{ secrets.sftp-password }}
-          SFTP_HOST_FINGERPRINT: ${{ secrets.sftp-host-fingerprint }}
-        run: |
-          set -euo pipefail
-      
-          if [[ -n "$SFTP_URL" &&
-                -n "$SFTP_USER" &&
-                -n "$SFTP_PASSWORD" &&
-                -n "$SFTP_HOST_FINGERPRINT" ]]; then
-      
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "SFTP upload is enabled."
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "SFTP upload is disabled."
-      
-            [[ -n "$SFTP_URL" ]] || echo "- Missing sftp-url"
-            [[ -n "$SFTP_USER" ]] || echo "- Missing sftp-username"
-            [[ -n "$SFTP_PASSWORD" ]] || echo "- Missing sftp-password"
-            [[ -n "$SFTP_HOST_FINGERPRINT" ]] || echo "- Missing sftp-host-fingerprint"
-          fi
-
       - name: Verify and trust SFTP server SSH host key
-        if: steps.sftp-enabled.outputs.enabled == 'true'
+        if: steps.sftp-config.outputs.enabled == 'true'
         shell: bash
         env:
           SFTP_BASE_URL: ${{ inputs.sftp-url }}
@@ -728,7 +760,7 @@ jobs:
           echo "  $HOME/.ssh/known_hosts"
 
       - name: Prepare curl with SFTP support
-        if: steps.sftp-enabled.outputs.enabled == 'true'
+        if: steps.sftp-config.outputs.enabled == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -781,7 +813,7 @@ jobs:
 
       - name: Upload macOS artifacts to SFTP
         id: sftp
-        if: steps.sftp-enabled.outputs.enabled == 'true'
+        if: steps.sftp-config.outputs.enabled == 'true'
         shell: bash
         env:
           SFTP_BASE_URL: ${{ inputs.sftp-url }}
@@ -902,7 +934,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          if [[ "${{ steps.sftp-enabled.outputs.enabled }}" != "true" ]]; then
+          if [[ "${{ steps.sftp-config.outputs.enabled }}" != "true" ]]; then
             echo "result=skipped" >> "$GITHUB_OUTPUT"
 
           elif [[ -n "${{ steps.sftp.outputs.result }}" ]]; then

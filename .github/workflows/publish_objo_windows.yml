@@ -125,6 +125,72 @@ jobs:
       OBJO_LICENSE: ${{ secrets.objo-license }}
 
     steps:
+
+      - name: Validate SFTP configuration
+        id: sftp-config
+        shell: pwsh
+        env:
+          SFTP_URL: ${{ inputs.sftp-url }}
+          SFTP_USER: ${{ secrets.sftp-username }}
+          SFTP_PASSWORD: ${{ secrets.sftp-password }}
+          SFTP_HOST_FINGERPRINT: ${{ secrets.sftp-host-fingerprint }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $values = [ordered]@{
+            "sftp-url"              = $env:SFTP_URL
+            "sftp-username"         = $env:SFTP_USER
+            "sftp-password"         = $env:SFTP_PASSWORD
+            "sftp-host-fingerprint" = $env:SFTP_HOST_FINGERPRINT
+          }
+
+          $provided = @()
+          $missing = @()
+
+          foreach ($entry in $values.GetEnumerator()) {
+            if ([string]::IsNullOrWhiteSpace($entry.Value)) {
+              $missing += $entry.Key
+            }
+            else {
+              $provided += $entry.Key
+            }
+          }
+
+          if ($provided.Count -eq 0) {
+            "enabled=false" >> $env:GITHUB_OUTPUT
+
+            Write-Host "SFTP upload is disabled."
+            Write-Host "No SFTP configuration values were supplied."
+
+            exit 0
+          }
+
+          if ($missing.Count -eq 0) {
+            "enabled=true" >> $env:GITHUB_OUTPUT
+
+            Write-Host "SFTP upload is enabled."
+            Write-Host "All required SFTP configuration values are present."
+
+            exit 0
+          }
+
+          Write-Host "::error::Incomplete SFTP configuration."
+
+          Write-Host "Provided:"
+          foreach ($item in $provided) {
+            Write-Host "  - $item"
+          }
+
+          Write-Host "Missing:"
+          foreach ($item in $missing) {
+            Write-Host "  - $item"
+          }
+
+          Write-Host ""
+          Write-Error "Either provide all SFTP configuration values or none of them."
+
+          exit 1
+          
       - name: Check out application repository
         uses: actions/checkout@v4
 
@@ -600,49 +666,9 @@ jobs:
           path: ${{ env.OUTPUT_DIRECTORY }}\artifacts\*.msix
           if-no-files-found: error
 
-      - name: Determine whether SFTP upload is enabled
-        id: sftp-enabled
-        shell: pwsh
-        env:
-          SFTP_URL: ${{ inputs.sftp-url }}
-          SFTP_USER: ${{ secrets.sftp-username }}
-          SFTP_PASSWORD: ${{ secrets.sftp-password }}
-          SFTP_HOST_FINGERPRINT: ${{ secrets.sftp-host-fingerprint }}
-        run: |
-          $enabled =
-            -not [string]::IsNullOrWhiteSpace($env:SFTP_URL) -and
-            -not [string]::IsNullOrWhiteSpace($env:SFTP_USER) -and
-            -not [string]::IsNullOrWhiteSpace($env:SFTP_PASSWORD) -and
-            -not [string]::IsNullOrWhiteSpace($env:SFTP_HOST_FINGERPRINT)
-      
-          if ($enabled) {
-            "enabled=true" >> $env:GITHUB_OUTPUT
-            Write-Host "SFTP upload is enabled."
-          }
-          else {
-            "enabled=false" >> $env:GITHUB_OUTPUT
-            Write-Host "SFTP upload is disabled."
-      
-            if ([string]::IsNullOrWhiteSpace($env:SFTP_URL)) {
-              Write-Host "- Missing sftp-url"
-            }
-      
-            if ([string]::IsNullOrWhiteSpace($env:SFTP_USER)) {
-              Write-Host "- Missing sftp-username"
-            }
-      
-            if ([string]::IsNullOrWhiteSpace($env:SFTP_PASSWORD)) {
-              Write-Host "- Missing sftp-password"
-            }
-      
-            if ([string]::IsNullOrWhiteSpace($env:SFTP_HOST_FINGERPRINT)) {
-              Write-Host "- Missing sftp-host-fingerprint"
-            }
-          }
-          
       - name: Find SFTP-capable curl
         id: sftp-curl
-        if: steps.sftp-enabled.outputs.enabled == 'true'
+        if: steps.sftp-config.outputs.enabled == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -705,7 +731,7 @@ jobs:
           }
 
       - name: Verify and trust SFTP server SSH host key
-        if: steps.sftp-enabled.outputs.enabled == 'true'
+        if: steps.sftp-config.outputs.enabled == 'true'
         shell: pwsh
         env:
           SFTP_BASE_URL: ${{ inputs.sftp-url }}
@@ -899,7 +925,7 @@ jobs:
 
       - name: Upload Windows artifacts to SFTP
         id: sftp
-        if: steps.sftp-enabled.outputs.enabled == 'true'
+        if: steps.sftp-config.outputs.enabled == 'true'
         shell: pwsh
         env:
           SFTP_BASE_URL: ${{ inputs.sftp-url }}
@@ -1078,7 +1104,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          $enabled = "${{ steps.sftp-enabled.outputs.enabled }}"
+          $enabled = "${{ steps.sftp-config.outputs.enabled }}"
           $result = "${{ steps.sftp.outputs.result }}"
 
           if ($enabled -ne "true") {
