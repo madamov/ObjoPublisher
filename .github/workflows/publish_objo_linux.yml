@@ -25,6 +25,12 @@ on:
         type: string
         default: ""
 
+      app-version:
+        description: Semantic application version; invalid or empty values leave project.json unchanged
+        required: false
+        type: string
+        default: ""
+
       sftp-url:
         description: Base SFTP URL for artifact upload
         required: false
@@ -82,6 +88,7 @@ jobs:
       SOLUTION_FILE: ${{ inputs.solution-file }}
       PROJECT_FILE: ${{ inputs.project-file }}
       APPLICATION_NAME: ${{ inputs.application-name }}
+      APP_VERSION: ${{ inputs.app-version }}
       OBJO_LICENSE: ${{ secrets.objo-license }}
 
     outputs:
@@ -209,6 +216,25 @@ jobs:
             APPLICATION_NAME="$(jq -er '.Name | select(type == "string" and length > 0)' "$PROJECT_FILE")"
             echo "APPLICATION_NAME=$APPLICATION_NAME" >> "$GITHUB_ENV"
             echo "Using application name from project.json: $APPLICATION_NAME"
+          fi
+
+      - name: Configure application version in project.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SEMVER_REGEX='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+          if [[ "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+            TMP_FILE="$(mktemp)"
+            jq --argjson major "${BASH_REMATCH[1]}" \
+              --argjson minor "${BASH_REMATCH[2]}" \
+              --argjson patch "${BASH_REMATCH[3]}" \
+              '.MajorVersion = $major | .MinorVersion = $minor | .PatchVersion = $patch' \
+              "$PROJECT_FILE" > "$TMP_FILE"
+            mv "$TMP_FILE" "$PROJECT_FILE"
+            echo "Using application version from workflow input: $APP_VERSION"
+          else
+            echo "Application version is empty or invalid; leaving version keys in project.json unchanged."
           fi
           
       - name: Determine Objo Studio version

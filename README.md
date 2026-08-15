@@ -251,6 +251,7 @@ Write workflow summary
 | `solution-file` | ✔ | | Path to the Objo solution file. |
 | `project-file` | ✔ | | Path to `project.json`. |
 | `application-name` | ✔ | | Application name used when collecting artifacts. |
+| `app-version` | | empty | Semantic application version. Valid values update `MajorVersion`, `MinorVersion`, and `PatchVersion`; empty or invalid values leave them unchanged. |
 | `output-directory` | | `Publish` | Output directory under `$HOME/Documents`. |
 | `targets` | | `osx-arm64,osx-x64` | Comma-separated list of runtime identifiers. |
 | `artifact-name` | | `objo-macos-publish` | Uploaded artifact name. |
@@ -507,6 +508,7 @@ Write workflow summary
 | `solution-file` | ✔ | | Path to the Objo solution file. |
 | `project-file` | ✔ | | Path to `project.json`. |
 | `application-name` | ✔ | | Application name used when naming uploaded artifacts. |
+| `app-version` | | empty | Semantic application version. Valid values update `MajorVersion`, `MinorVersion`, and `PatchVersion`; empty or invalid values leave them unchanged. |
 | `output-directory` | | `Publish` | Output directory under the current user's home directory. |
 | `targets` | | `linux-x64` | Comma-separated list of Linux runtime identifiers. |
 | `artifact-name` | | `objo-linux-publish` | Uploaded artifact name. |
@@ -748,6 +750,7 @@ Write workflow summary
 | `solution-file` | ✔ | | Path to the Objo solution file. |
 | `project-file` | ✔ | | Path to `project.json`. |
 | `application-name` | ✔ | | Application name used when collecting artifacts and generating the default correlation ID. |
+| `app-version` | | empty | Semantic application version. Valid values update `MajorVersion`, `MinorVersion`, and `PatchVersion`; empty or invalid values leave them unchanged. |
 | `output-directory` | | `Publish` | Output directory under the current Windows user's home directory. |
 | `targets` | | `win-x64` | Comma-separated list of Windows runtime identifiers. |
 | `artifact-name` | | `objo-windows-publish` | Uploaded artifact name. |
@@ -1093,6 +1096,7 @@ Upload artifacts
 | `solution-file` | ✔ | | Path to the Objo solution file. |
 | `project-file` | ✔ | | Path to `project.json`. |
 | `application-name` | ✔ | | Application name used when generating the default Azure correlation ID and naming artifacts. |
+| `app-version` | | empty | Semantic application version. Valid values update `MajorVersion`, `MinorVersion`, and `PatchVersion`; empty or invalid values leave them unchanged. |
 | `output-directory` | | `Publish` | Output directory under the current Windows user's home directory. |
 | `targets` | | `win-x64` | Comma-separated list of Windows runtime identifiers. |
 | `artifact-name` | | `objo-windows-signed-publish` | Uploaded artifact name. |
