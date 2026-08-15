@@ -219,7 +219,7 @@ jobs:
           
 
       - name: Check out application repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set output directory
         shell: pwsh
