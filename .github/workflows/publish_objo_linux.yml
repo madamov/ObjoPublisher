@@ -20,9 +20,10 @@ on:
         type: string
 
       application-name:
-        description: Application name
-        required: true
+        description: Application name; leave empty to use the Name from project.json
+        required: false
         type: string
+        default: ""
 
       sftp-url:
         description: Base SFTP URL for artifact upload
@@ -192,9 +193,22 @@ jobs:
             exit 1
           fi
 
-          if [[ -z "$APPLICATION_NAME" ]]; then
-            echo "Application name cannot be empty." >&2
-            exit 1
+
+      - name: Configure application name in project.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$APPLICATION_NAME" ]]; then
+            TMP_FILE="$(mktemp)"
+            jq --arg name "$APPLICATION_NAME" '.Name = $name' \
+              "$PROJECT_FILE" > "$TMP_FILE"
+            mv "$TMP_FILE" "$PROJECT_FILE"
+            echo "Using application name from workflow input: $APPLICATION_NAME"
+          else
+            APPLICATION_NAME="$(jq -er '.Name | select(type == "string" and length > 0)' "$PROJECT_FILE")"
+            echo "APPLICATION_NAME=$APPLICATION_NAME" >> "$GITHUB_ENV"
+            echo "Using application name from project.json: $APPLICATION_NAME"
           fi
           
       - name: Determine Objo Studio version

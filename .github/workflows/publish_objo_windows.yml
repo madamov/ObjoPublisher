@@ -14,9 +14,10 @@ on:
         type: string
 
       application-name:
-        description: Application name
-        required: true
+        description: Application name; leave empty to use the Name from project.json
+        required: false
         type: string
+        default: ""
 
       output-directory:
         description: Directory inside the current user's home directory
@@ -268,9 +269,23 @@ jobs:
               ConvertFrom-Json |
               Out-Null
 
-          if ([string]::IsNullOrWhiteSpace($env:APPLICATION_NAME)) {
-              throw "Application name cannot be empty."
-          }
+
+      - name: Configure application name in project.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$APPLICATION_NAME" ]]; then
+            TMP_FILE="$(mktemp)"
+            jq --arg name "$APPLICATION_NAME" '.Name = $name' \
+              "$PROJECT_FILE" > "$TMP_FILE"
+            mv "$TMP_FILE" "$PROJECT_FILE"
+            echo "Using application name from workflow input: $APPLICATION_NAME"
+          else
+            APPLICATION_NAME="$(jq -er '.Name | select(type == "string" and length > 0)' "$PROJECT_FILE")"
+            echo "APPLICATION_NAME=$APPLICATION_NAME" >> "$GITHUB_ENV"
+            echo "Using application name from project.json: $APPLICATION_NAME"
+          fi
 
       - name: Determine Objo Studio version
         id: version
@@ -1169,7 +1184,7 @@ jobs:
 
           | Item | Result |
           |---|---|
-          | Application | ``${{ inputs.application-name }}`` |
+          | Application | ``$env:APPLICATION_NAME`` |
           | Targets | ``${{ inputs.targets }}`` |
           | Artifact | ``${{ inputs.artifact-name }}`` |
           | Build | **$buildResult** |
