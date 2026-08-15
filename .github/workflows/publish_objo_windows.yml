@@ -121,10 +121,41 @@ jobs:
       AZURE_PACKAGE_PUBLISHER: ${{ secrets.azure-package-publisher }}
       AZURE_TIMESTAMP_URL: ${{ secrets.azure-timestamp-url }}
       AZURE_CORRELATION_ID: ${{ inputs.azure-correlation-id }}
+      AZURE_TENANT_ID: ${{ secrets.azure-tenant-id }}
+      AZURE_CLIENT_ID: ${{ secrets.azure-client-id }}
+      AZURE_CLIENT_SECRET: ${{ secrets.azure-client-secret }}
 
       OBJO_LICENSE: ${{ secrets.objo-license }}
 
     steps:
+
+      - name: Check Azure signing configuration
+        id: azure-signing
+        shell: pwsh
+        run: |
+          $requiredValues = @(
+            $env:AZURE_TENANT_ID,
+            $env:AZURE_CLIENT_ID,
+            $env:AZURE_CLIENT_SECRET,
+            $env:AZURE_ENDPOINT,
+            $env:AZURE_ACCOUNT_NAME,
+            $env:AZURE_CERTIFICATE_PROFILE_NAME,
+            $env:AZURE_PACKAGE_PUBLISHER
+          )
+
+          $available = -not ($requiredValues | Where-Object {
+            [string]::IsNullOrWhiteSpace($_)
+          })
+
+          "available=$($available.ToString().ToLowerInvariant())" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          if ($available) {
+            Write-Host "Azure Trusted Signing is enabled."
+          }
+          else {
+            Write-Host "Azure Trusted Signing is disabled because one or more required secrets were not provided."
+          }
 
       - name: Validate SFTP configuration
         id: sftp-config
@@ -557,7 +588,7 @@ jobs:
           }
 
       - name: Azure Trusted Signing (with timestamp)
-        if: ${{ env.AZURE_TIMESTAMP_URL != '' }}
+        if: ${{ steps.azure-signing.outputs.available == 'true' && env.AZURE_TIMESTAMP_URL != '' }}
         uses: azure/trusted-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
@@ -579,7 +610,7 @@ jobs:
           timestamp-digest: SHA256
           
       - name: Azure Trusted Signing
-        if: ${{ env.AZURE_TIMESTAMP_URL == '' }}
+        if: ${{ steps.azure-signing.outputs.available == 'true' && env.AZURE_TIMESTAMP_URL == '' }}
         uses: azure/trusted-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
