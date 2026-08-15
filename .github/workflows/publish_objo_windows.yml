@@ -1201,6 +1201,20 @@ jobs:
               -Encoding utf8 `
               -Append
 
+          if ("${{ steps.azure-signing.outputs.available }}" -ne "true") {
+            "⚠️ Azure signing was skipped." |
+              Out-File `
+                -FilePath $env:GITHUB_STEP_SUMMARY `
+                -Encoding utf8 `
+                -Append
+
+            "" |
+              Out-File `
+                -FilePath $env:GITHUB_STEP_SUMMARY `
+                -Encoding utf8 `
+                -Append
+          }
+
           switch ($sftpResult) {
 
             "success" {
