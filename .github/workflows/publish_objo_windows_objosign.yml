@@ -17,9 +17,10 @@ on:
         type: string
 
       application-name:
-        description: Application name
-        required: true
+        description: Application name; leave empty to use the Name from project.json
+        required: false
         type: string
+        default: ""
 
       output-directory:
         description: Directory inside the current user's home directory
@@ -241,26 +242,6 @@ jobs:
 
           Write-Host "Output directory: $outputDirectory"
 
-      - name: Resolve Azure correlation ID
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $correlationId = $env:AZURE_CORRELATION_ID
-
-          if ([string]::IsNullOrWhiteSpace($correlationId)) {
-            $safeApplicationName = $env:APPLICATION_NAME -replace '[^A-Za-z0-9._-]', '-'
-            $correlationId = "$safeApplicationName-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          }
-
-          "AZURE_CORRELATION_ID=$correlationId" |
-            Out-File `
-              -FilePath $env:GITHUB_ENV `
-              -Append `
-              -Encoding utf8
-
-          Write-Host "Azure correlation ID: $correlationId"
-
       - name: Validate workflow inputs
         shell: pwsh
         run: |
@@ -285,9 +266,43 @@ jobs:
             throw "Project file is not valid JSON: $env:PROJECT_FILE"
           }
 
-          if ([string]::IsNullOrWhiteSpace($env:APPLICATION_NAME)) {
-            throw "Application name cannot be empty."
+
+      - name: Configure application name in project.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$APPLICATION_NAME" ]]; then
+            TMP_FILE="$(mktemp)"
+            jq --arg name "$APPLICATION_NAME" '.Name = $name' \
+              "$PROJECT_FILE" > "$TMP_FILE"
+            mv "$TMP_FILE" "$PROJECT_FILE"
+            echo "Using application name from workflow input: $APPLICATION_NAME"
+          else
+            APPLICATION_NAME="$(jq -er '.Name | select(type == "string" and length > 0)' "$PROJECT_FILE")"
+            echo "APPLICATION_NAME=$APPLICATION_NAME" >> "$GITHUB_ENV"
+            echo "Using application name from project.json: $APPLICATION_NAME"
+          fi
+
+      - name: Resolve Azure correlation ID
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $correlationId = $env:AZURE_CORRELATION_ID
+
+          if ([string]::IsNullOrWhiteSpace($correlationId)) {
+            $safeApplicationName = $env:APPLICATION_NAME -replace '[^A-Za-z0-9._-]', '-'
+            $correlationId = "$safeApplicationName-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           }
+
+          "AZURE_CORRELATION_ID=$correlationId" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+          Write-Host "Azure correlation ID: $correlationId"
 
       - name: Determine Objo Studio version
         id: version
@@ -1188,7 +1203,7 @@ jobs:
 
           | Item | Result |
           |---|---|
-          | Application | ``${{ inputs.application-name }}`` |
+          | Application | ``$env:APPLICATION_NAME`` |
           | Targets | ``${{ inputs.targets }}`` |
           | Artifact | ``${{ inputs.artifact-name }}`` |
           | Build | **$buildResult** |

@@ -26,9 +26,10 @@ on:
         type: string
 
       application-name:
-        description: Application name
-        required: true
+        description: Application name; leave empty to use the Name from project.json
+        required: false
         type: string
+        default: ""
 
       artifact-name:
         description: Uploaded artifact name
@@ -255,6 +256,23 @@ jobs:
           if ! jq empty "$PROJECT_FILE"; then
             echo "Project file is not valid JSON: $PROJECT_FILE" >&2
             exit 1
+          fi
+
+      - name: Configure application name in project.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$APPLICATION_NAME" ]]; then
+            TMP_FILE="$(mktemp)"
+            jq --arg name "$APPLICATION_NAME" '.Name = $name' \
+              "$PROJECT_FILE" > "$TMP_FILE"
+            mv "$TMP_FILE" "$PROJECT_FILE"
+            echo "Using application name from workflow input: $APPLICATION_NAME"
+          else
+            APPLICATION_NAME="$(jq -er '.Name | select(type == "string" and length > 0)' "$PROJECT_FILE")"
+            echo "APPLICATION_NAME=$APPLICATION_NAME" >> "$GITHUB_ENV"
+            echo "Using application name from project.json: $APPLICATION_NAME"
           fi
 
       - name: Install Apple signing certificate
@@ -981,7 +999,7 @@ jobs:
 
             echo "| Item | Result |"
             echo "|---|---|"
-            echo "| Application | \`${{ inputs.application-name }}\` |"
+            echo "| Application | \`$APPLICATION_NAME\` |"
             echo "| Targets | \`${{ inputs.targets }}\` |"
             echo "| Artifact | \`${{ inputs.artifact-name }}\` |"
             echo "| Build | **$BUILD_RESULT** |"
