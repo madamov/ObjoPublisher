@@ -1021,7 +1021,7 @@ jobs:
             echo
 
             if [[ "${{ steps.apple-signing.outputs.available }}" != "true" ]]; then
-              echo "⚠️ Apple signing and notarization were skipped."
+              echo "⚠️ Apple signing and notarization were skipped. Objo studio is ad-hoc signing in this case."
               echo
             fi
 
