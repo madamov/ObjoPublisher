@@ -1002,6 +1002,11 @@ jobs:
 
             echo
 
+            if [[ "${{ steps.apple-signing.outputs.available }}" != "true" ]]; then
+              echo "⚠️ Apple signing and notarization were skipped."
+              echo
+            fi
+
             case "$SFTP_RESULT" in
               success)
                 echo "✅ DMG files uploaded to the SFTP server."
