@@ -87,15 +87,10 @@ By default the latest released version of Objo Studio is used.
 
 ## Automatic license management
 
-Whenever publishing requires an activated Objo Studio license, the workflow automatically
+The workflows select the licensing scheme from the resolved Objo Studio version:
 
-1. creates a temporary license file,
-2. activates the license,
-3. performs the requested publish operation,
-4. deactivates the license,
-5. removes the temporary license file.
-
-License deactivation is performed even when publishing fails.
+- Versions earlier than 26.8.4 use persistent activation. The workflow creates a temporary key file, activates the license, publishes, deactivates the license even if publishing fails, and removes the key file.
+- Version 26.8.4 and later use temporary activation by passing `--license-key-env OBJO_LICENSE_KEY` to `objo publish`. No persistent activation or deactivation is performed.
 
 ---
 
@@ -443,7 +438,7 @@ jobs:
 
 - The workflow automatically creates and removes a temporary keychain.
 - The temporary notarization profile exists only for the duration of the workflow.
-- The Objo Studio license is always deactivated before the workflow finishes.
+- Persistent Objo Studio licenses used with versions earlier than 26.8.4 are deactivated before the workflow finishes.
 - The downloaded Objo Studio installation is cached by version.
 - If Apple signing is disabled, the workflow still produces valid unsigned DMG files.
 - SFTP upload is skipped unless `sftp-url`, `sftp-username`, and `sftp-password` are all supplied.
@@ -456,7 +451,7 @@ jobs:
 
 Publishes one or more Linux applications created with Objo Studio.
 
-The workflow restores or downloads the requested Objo Studio version, activates an Objo Studio license, publishes the application for one or more Linux runtime identifiers, collects the generated archives, uploads them as workflow artifacts, optionally uploads them to SFTP, and finally deactivates the license.
+The workflow restores or downloads the requested Objo Studio version, selects the compatible licensing scheme, publishes the application for one or more Linux runtime identifiers, collects the generated archives, uploads them as workflow artifacts, and optionally uploads them to SFTP.
 
 Unlike the macOS and Windows workflows, Linux publishing does not require any platform-specific signing.
 
@@ -673,7 +668,7 @@ jobs:
 - Multiple runtime identifiers can be published during a single workflow run.
 - The latest Objo Studio release is used automatically unless a specific version is requested.
 - The downloaded Objo Studio installation is cached by version.
-- The Objo Studio license is automatically deactivated even if publishing fails.
+- Persistent Objo Studio licenses used with versions earlier than 26.8.4 are deactivated even if publishing fails.
 - Every generated Linux archive is collected and uploaded automatically.
 - SFTP upload is skipped unless all three SFTP values are supplied.
 - SFTP artifacts are uploaded under `<sftp-url>/linux/`.
@@ -1020,7 +1015,7 @@ jobs:
 - Azure signing metadata is deliberately cleared from `project.json`.
 - The package publisher is still written into the project because the MSIX manifest must contain the correct publisher identity.
 - The official Azure Trusted Signing GitHub Action signs all generated MSIX packages recursively.
-- The Objo Studio license is deactivated immediately after publishing.
+- Persistent Objo Studio licenses used with versions earlier than 26.8.4 are deactivated immediately after publishing.
 - Multiple Windows targets are supported in one run.
 - Objo Studio is cached by version.
 - Timestamping is optional.
@@ -1339,7 +1334,7 @@ jobs:
 - Microsoft's Azure Artifact Signing Client Tools are installed automatically.
 - The workflow automatically locates `Azure.CodeSigning.Dlib.dll`.
 - No additional signing step is required after publishing.
-- The Objo Studio license is always deactivated before the workflow finishes.
+- Persistent Objo Studio licenses used with versions earlier than 26.8.4 are deactivated before the workflow finishes.
 - Objo Studio is cached by version.
 - Multiple Windows runtime identifiers are supported.
 - Timestamping is optional.

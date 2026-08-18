@@ -119,7 +119,7 @@ jobs:
       APPLE_TEAM_ID: ${{ secrets.apple-team-id }}
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.apple-app-specific-password }}
       APPLE_ID: ${{ secrets.apple-id }}
-      OBJO_LICENSE: ${{ secrets.objo-license }}
+      OBJO_LICENSE_KEY: ${{ secrets.objo-license }}
       APPLE_NOTARY_PROFILE: ${{ inputs.apple-notary-profile }}
       PROJECT_FILE: ${{ inputs.project-file }}
       SOLUTION_FILE: ${{ inputs.solution-file }}
@@ -466,6 +466,16 @@ jobs:
             echo "version=$VERSION"
             echo "downloads_base_url=$DOWNLOADS_BASE_URL"
             echo "download_url=$DOWNLOAD_URL"
+            if awk -v version="$VERSION" 'BEGIN {
+              split(version, v, ".")
+              exit !((v[1] + 0) > 26 ||
+                (v[1] + 0) == 26 && (v[2] + 0) > 8 ||
+                (v[1] + 0) == 26 && (v[2] + 0) == 8 && (v[3] + 0) >= 4)
+            }'; then
+              echo "license_mode=temporary"
+            else
+              echo "license_mode=persistent"
+            fi
           } >> "$GITHUB_OUTPUT"
 
           echo "Downloads base URL: $DOWNLOADS_BASE_URL"
@@ -560,9 +570,8 @@ jobs:
           echo "Objo executable: $OBJO_BIN"
 
       - name: Activate Objo license
+        if: steps.version.outputs.license_mode == 'persistent'
         shell: bash
-        env:
-          OBJO_LICENSE: ${{ secrets.objo-license }}
         run: |
           set -euo pipefail
 
@@ -574,7 +583,7 @@ jobs:
 
           trap cleanup_license_file EXIT
 
-          printf '%s' "$OBJO_LICENSE" > "$LICENSE_FILE"
+          printf '%s' "$OBJO_LICENSE_KEY" > "$LICENSE_FILE"
 
           "$OBJO_BIN" license activate \
             --key-file "$LICENSE_FILE"
@@ -584,6 +593,7 @@ jobs:
         shell: bash
         env:
           PUBLISH_TARGETS: ${{ inputs.targets }}
+          OBJO_LICENSE_MODE: ${{ steps.version.outputs.license_mode }}
         run: |
           set -euo pipefail
 
@@ -620,6 +630,10 @@ jobs:
 
           cmd+=(--output "$OUTPUT_DIRECTORY")
 
+          if [[ "$OBJO_LICENSE_MODE" == "temporary" ]]; then
+            cmd+=(--license-key-env OBJO_LICENSE_KEY)
+          fi
+
           echo "Running command:"
           printf ' %q' "${cmd[@]}"
           echo
@@ -627,7 +641,7 @@ jobs:
           "${cmd[@]}"
           
       - name: Deactivate Objo license
-        if: always()
+        if: ${{ always() && steps.version.outputs.license_mode == 'persistent' }}
         shell: bash
         run: |
           set +e
@@ -686,7 +700,7 @@ jobs:
           ls -lh "$ARTIFACT_DIR"
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-name }}
           path: ${{ env.OUTPUT_DIRECTORY }}/artifacts/*.dmg

@@ -133,7 +133,7 @@ jobs:
       AZURE_CLIENT_ID: ${{ secrets.azure-client-id }}
       AZURE_CLIENT_SECRET: ${{ secrets.azure-client-secret }}
 
-      OBJO_LICENSE: ${{ secrets.objo-license }}
+      OBJO_LICENSE_KEY: ${{ secrets.objo-license }}
 
     steps:
 
@@ -362,6 +362,16 @@ jobs:
             echo "version=$VERSION"
             echo "downloads_base_url=$DOWNLOADS_BASE_URL"
             echo "download_url=$DOWNLOAD_URL"
+            if awk -v version="$VERSION" 'BEGIN {
+              split(version, v, ".")
+              exit !((v[1] + 0) > 26 ||
+                (v[1] + 0) == 26 && (v[2] + 0) > 8 ||
+                (v[1] + 0) == 26 && (v[2] + 0) == 8 && (v[3] + 0) >= 4)
+            }'; then
+              echo "license_mode=temporary"
+            else
+              echo "license_mode=persistent"
+            fi
           } >> "$GITHUB_OUTPUT"
 
           echo "Downloads base URL: $DOWNLOADS_BASE_URL"
@@ -501,6 +511,7 @@ jobs:
             Write-Host
 
       - name: Activate Objo license
+        if: steps.version.outputs.license_mode == 'persistent'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -512,7 +523,7 @@ jobs:
           try {
             Set-Content `
               -Path $licenseFile `
-              -Value $env:OBJO_LICENSE `
+              -Value $env:OBJO_LICENSE_KEY `
               -NoNewline `
               -Encoding utf8
 
@@ -535,6 +546,7 @@ jobs:
         shell: pwsh
         env:
           PUBLISH_TARGETS: ${{ inputs.targets }}
+          OBJO_LICENSE_MODE: ${{ steps.version.outputs.license_mode }}
         run: |
           $ErrorActionPreference = "Stop"
       
@@ -587,6 +599,11 @@ jobs:
       
           $arguments += "--output"
           $arguments += $env:OUTPUT_DIRECTORY
+
+          if ($env:OBJO_LICENSE_MODE -eq "temporary") {
+            $arguments += "--license-key-env"
+            $arguments += "OBJO_LICENSE_KEY"
+          }
       
           Write-Host "Running:"
           Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
@@ -598,7 +615,7 @@ jobs:
           }
 
       - name: Deactivate Objo license
-        if: always()
+        if: ${{ always() && steps.version.outputs.license_mode == 'persistent' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
@@ -732,7 +749,7 @@ jobs:
               Length
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-name }}
           path: ${{ env.OUTPUT_DIRECTORY }}\artifacts\*.msix
