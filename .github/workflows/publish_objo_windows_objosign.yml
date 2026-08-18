@@ -117,7 +117,7 @@ jobs:
       APPLICATION_NAME: ${{ inputs.application-name }}
       APP_VERSION: ${{ inputs.app-version }}
 
-      OBJO_LICENSE: ${{ secrets.objo-license }}
+      OBJO_LICENSE_KEY: ${{ secrets.objo-license }}
       AZURE_ENDPOINT: ${{ secrets.azure-endpoint }}
       AZURE_ACCOUNT_NAME: ${{ secrets.azure-account-name }}
       AZURE_CERTIFICATE_PROFILE_NAME: ${{ secrets.azure-certificate-profile-name }}
@@ -379,6 +379,16 @@ jobs:
             echo "version=$VERSION"
             echo "downloads_base_url=$DOWNLOADS_BASE_URL"
             echo "download_url=$DOWNLOAD_URL"
+            if awk -v version="$VERSION" 'BEGIN {
+              split(version, v, ".")
+              exit !((v[1] + 0) > 26 ||
+                (v[1] + 0) == 26 && (v[2] + 0) > 8 ||
+                (v[1] + 0) == 26 && (v[2] + 0) == 8 && (v[3] + 0) >= 4)
+            }'; then
+              echo "license_mode=temporary"
+            else
+              echo "license_mode=persistent"
+            fi
           } >> "$GITHUB_OUTPUT"
 
           echo "Downloads base URL: $DOWNLOADS_BASE_URL"
@@ -443,6 +453,37 @@ jobs:
 
           Write-Host "Found Objo executable:"
           Write-Host $objo.FullName
+
+      - name: Activate Objo license
+        if: steps.version.outputs.license_mode == 'persistent'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $licenseFile = Join-Path `
+            $env:RUNNER_TEMP `
+            "objo-license-key.txt"
+
+          try {
+            Set-Content `
+              -Path $licenseFile `
+              -Value $env:OBJO_LICENSE_KEY `
+              -NoNewline `
+              -Encoding utf8
+
+            & $env:OBJO_BIN license activate `
+              --key-file $licenseFile
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Objo license activation failed with exit code $LASTEXITCODE."
+            }
+          }
+          finally {
+            Remove-Item `
+              -Path $licenseFile `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
 
       - name: Install Azure Artifact Signing Client Tools
         if: ${{ steps.azure-signing.outputs.available == 'true' }}
@@ -588,6 +629,7 @@ jobs:
         shell: pwsh
         env:
           PUBLISH_TARGETS: ${{ inputs.targets }}
+          OBJO_LICENSE_MODE: ${{ steps.version.outputs.license_mode }}
         run: |
           $ErrorActionPreference = "Stop"
       
@@ -640,6 +682,11 @@ jobs:
       
           $arguments += "--output"
           $arguments += $env:OUTPUT_DIRECTORY
+
+          if ($env:OBJO_LICENSE_MODE -eq "temporary") {
+            $arguments += "--license-key-env"
+            $arguments += "OBJO_LICENSE_KEY"
+          }
       
           Write-Host "Running:"
           Write-Host "`"$env:OBJO_BIN`" $($arguments -join ' ')"
@@ -651,7 +698,7 @@ jobs:
           }
 
       - name: Deactivate Objo license
-        if: always()
+        if: ${{ always() && steps.version.outputs.license_mode == 'persistent' }}
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
