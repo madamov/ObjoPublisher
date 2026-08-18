@@ -40,6 +40,12 @@ on:
         type: string
         default: "win-x64"
 
+      windows-format:
+        description: Windows output format (MSIX, folder, or zip)
+        required: false
+        type: string
+        default: "MSIX"
+
       artifact-name:
         description: Uploaded artifact name
         required: false
@@ -80,16 +86,16 @@ on:
         required: true
     
       azure-endpoint:
-        required: true
+        required: false
     
       azure-account-name:
-        required: true
+        required: false
     
       azure-certificate-profile-name:
-        required: true
+        required: false
     
       azure-package-publisher:
-        required: true
+        required: false
     
       azure-timestamp-url:
         required: false
@@ -116,6 +122,7 @@ jobs:
       PROJECT_FILE: ${{ inputs.project-file }}
       APPLICATION_NAME: ${{ inputs.application-name }}
       APP_VERSION: ${{ inputs.app-version }}
+      WINDOWS_FORMAT: ${{ inputs.windows-format }}
 
       OBJO_LICENSE_KEY: ${{ secrets.objo-license }}
       AZURE_ENDPOINT: ${{ secrets.azure-endpoint }}
@@ -151,6 +158,28 @@ jobs:
           else {
             Write-Host "Azure Trusted Signing is disabled because one or more required secrets were not provided."
           }
+
+      - name: Resolve Windows output format
+        id: windows-format
+        shell: pwsh
+        env:
+          AZURE_SIGNING_AVAILABLE: ${{ steps.azure-signing.outputs.available }}
+        run: |
+          $format = $env:WINDOWS_FORMAT.Trim().ToLowerInvariant()
+          if ([string]::IsNullOrWhiteSpace($format)) { $format = "msix" }
+          if ($format -notin @("msix", "folder", "zip")) {
+            throw "windows-format must be MSIX, folder, or zip. Received: $env:WINDOWS_FORMAT"
+          }
+          $requestedFormat = $format
+          if ($format -eq "zip" -and $env:AZURE_SIGNING_AVAILABLE -eq "true") {
+            $format = "folder"
+            Write-Host "Azure signing is enabled; publishing a folder so its contents can be signed before zipping."
+          }
+          "requested=$requestedFormat" >> $env:GITHUB_OUTPUT
+          "effective=$format" >> $env:GITHUB_OUTPUT
+          "EFFECTIVE_WINDOWS_FORMAT=$format" >> $env:GITHUB_ENV
+          Write-Host "Requested Windows format: $requestedFormat"
+          Write-Host "Effective Windows format: $format"
 
       - name: Validate SFTP configuration
         id: sftp-config
@@ -682,6 +711,8 @@ jobs:
       
           $arguments += "--output"
           $arguments += $env:OUTPUT_DIRECTORY
+          $arguments += "--windows-format"
+          $arguments += $env:EFFECTIVE_WINDOWS_FORMAT
 
           if ($env:OBJO_LICENSE_MODE -eq "temporary") {
             $arguments += "--license-key-env"
@@ -743,52 +774,33 @@ jobs:
             -Force |
             Out-Null
 
-          $packages = @(
-            Get-ChildItem `
-              -LiteralPath $env:OUTPUT_DIRECTORY `
-              -Recurse `
-              -Filter "*.msix" `
-              -File |
-              Where-Object {
-                $_.DirectoryName -ne $artifactDirectory
-              }
-          )
-
-          if ($packages.Count -eq 0) {
-            throw "No signed MSIX packages were found."
+          if ($env:EFFECTIVE_WINDOWS_FORMAT -eq "folder") {
+            $destination = Join-Path $artifactDirectory "$($env:APPLICATION_NAME).zip"
+            $items = Get-ChildItem -LiteralPath $env:OUTPUT_DIRECTORY -Force |
+              Where-Object { $_.FullName -ne $artifactDirectory }
+            if ($items.Count -eq 0) { throw "The Windows output folder is empty." }
+            Compress-Archive -Path $items.FullName -DestinationPath $destination -Force
+            Write-Host "Packaged signed Windows folder: $destination"
           }
+          else {
+            $extension = if ($env:EFFECTIVE_WINDOWS_FORMAT -eq "zip") { "*.zip" } else { "*.msix" }
+            $packages = @(Get-ChildItem -LiteralPath $env:OUTPUT_DIRECTORY -Recurse -Filter $extension -File |
+              Where-Object { $_.DirectoryName -ne $artifactDirectory })
+            if ($packages.Count -eq 0) { throw "No Windows $extension packages were found." }
 
-          $packageCount = 0
-
-          foreach ($package in $packages) {
-            $destination = Join-Path `
-              $artifactDirectory `
-              $package.Name
-
-            if (Test-Path -LiteralPath $destination) {
-              $parentFolder = Split-Path `
-                $package.DirectoryName `
-                -Leaf
-
-              $destination = Join-Path `
-                $artifactDirectory `
-                "$($env:APPLICATION_NAME)-$parentFolder-$($package.Name)"
+            foreach ($package in $packages) {
+              $destination = Join-Path $artifactDirectory $package.Name
+              if (Test-Path $destination) {
+                $parentFolder = Split-Path $package.DirectoryName -Leaf
+                $destination = Join-Path $artifactDirectory "$($env:APPLICATION_NAME)-$parentFolder$($package.Extension)"
+              }
+              Copy-Item $package.FullName $destination -Force
+              Write-Host "Collected: $($package.FullName)"
             }
-
-            Copy-Item `
-              -LiteralPath $package.FullName `
-              -Destination $destination `
-              -Force
-
-            Write-Host "Collected:"
-            Write-Host "  Source:      $($package.FullName)"
-            Write-Host "  Destination: $destination"
-
-            $packageCount++
           }
 
           Write-Host ""
-          Write-Host "Prepared $packageCount signed Windows package(s):"
+          Write-Host "Prepared signed Windows artifacts:"
 
           Get-ChildItem `
             -LiteralPath $artifactDirectory `
@@ -799,7 +811,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-name }}
-          path: ${{ env.OUTPUT_DIRECTORY }}\artifacts\*.msix
+          path: ${{ env.OUTPUT_DIRECTORY }}\artifacts\*
           if-no-files-found: error
 
 

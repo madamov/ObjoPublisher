@@ -748,6 +748,7 @@ Write workflow summary
 | `app-version` | | empty | Semantic application version. Valid values update `MajorVersion`, `MinorVersion`, and `PatchVersion`; empty or invalid values leave them unchanged. |
 | `output-directory` | | `Publish` | Output directory under the current Windows user's home directory. |
 | `targets` | | `win-x64` | Comma-separated list of Windows runtime identifiers. |
+| `windows-format` | | `MSIX` | Windows output format: `MSIX`, `folder`, or `zip`. With Azure signing, `zip` is published as a folder, signed, and then zipped. Folder output is also zipped after signing for artifact and SFTP upload. |
 | `artifact-name` | | `objo-windows-publish` | Uploaded artifact name. |
 | `objo-version` | | latest | Specific Objo Studio version to use. |
 | `azure-correlation-id` | | generated | Optional Azure signing correlation ID. When omitted, a value based on the application name and GitHub run ID is generated. |
@@ -1094,6 +1095,7 @@ Upload artifacts
 | `app-version` | | empty | Semantic application version. Valid values update `MajorVersion`, `MinorVersion`, and `PatchVersion`; empty or invalid values leave them unchanged. |
 | `output-directory` | | `Publish` | Output directory under the current Windows user's home directory. |
 | `targets` | | `win-x64` | Comma-separated list of Windows runtime identifiers. |
+| `windows-format` | | `MSIX` | Windows output format: `MSIX`, `folder`, or `zip`. With Azure signing, `zip` is published as a folder, signed, and then zipped. Folder output is also zipped after signing for artifact and SFTP upload. |
 | `artifact-name` | | `objo-windows-signed-publish` | Uploaded artifact name. |
 | `objo-version` | | latest | Specific Objo Studio version to use. |
 | `azure-correlation-id` | | generated | Optional Azure correlation ID. When omitted, the workflow generates one automatically. |
