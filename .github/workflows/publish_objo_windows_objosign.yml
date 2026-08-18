@@ -1274,6 +1274,15 @@ jobs:
         run: |
           $buildResult = "${{ steps.publish.outcome }}"
           $sftpResult = "${{ steps.sftp-result.outputs.result }}"
+          $requestedFormat = "${{ steps.windows-format.outputs.requested }}"
+          $effectiveFormat = "${{ steps.windows-format.outputs.effective }}"
+          $azureAvailable = "${{ steps.azure-signing.outputs.available }}" -eq "true"
+
+          if ([string]::IsNullOrWhiteSpace($requestedFormat)) { $requestedFormat = "msix" }
+          if ([string]::IsNullOrWhiteSpace($effectiveFormat)) { $effectiveFormat = $requestedFormat }
+
+          $signed = if ($azureAvailable -and $buildResult -eq "success") { "yes" } else { "no" }
+          $zipViaSignedFolder = if ($requestedFormat -eq "zip" -and $azureAvailable) { "yes" } else { "no" }
 
           if ([string]::IsNullOrWhiteSpace($buildResult)) {
             $buildResult = "not-run"
@@ -1290,6 +1299,10 @@ jobs:
           |---|---|
           | Application | ``$env:APPLICATION_NAME`` |
           | Targets | ``${{ inputs.targets }}`` |
+          | Requested Windows format | ``$requestedFormat`` |
+          | Effective publish format | ``$effectiveFormat`` |
+          | Output signed | **$signed** |
+          | ZIP requested with Azure signing | **$zipViaSignedFolder** |
           | Artifact | ``${{ inputs.artifact-name }}`` |
           | Build | **$buildResult** |
           | SFTP upload | **$sftpResult** |

@@ -681,6 +681,7 @@ jobs:
           }
 
       - name: Azure Trusted Signing (with timestamp)
+        id: azure-sign-timestamped
         if: ${{ steps.azure-signing.outputs.available == 'true' && env.AZURE_TIMESTAMP_URL != '' }}
         uses: azure/trusted-signing-action@v2
         with:
@@ -703,6 +704,7 @@ jobs:
           timestamp-digest: SHA256
           
       - name: Azure Trusted Signing
+        id: azure-sign
         if: ${{ steps.azure-signing.outputs.available == 'true' && env.AZURE_TIMESTAMP_URL == '' }}
         uses: azure/trusted-signing-action@v2
         with:
@@ -1254,6 +1256,19 @@ jobs:
         run: |
           $buildResult = "${{ steps.publish.outcome }}"
           $sftpResult = "${{ steps.sftp-result.outputs.result }}"
+          $requestedFormat = "${{ steps.windows-format.outputs.requested }}"
+          $effectiveFormat = "${{ steps.windows-format.outputs.effective }}"
+          $azureAvailable = "${{ steps.azure-signing.outputs.available }}" -eq "true"
+          $signingOutcome = "${{ steps.azure-sign.outcome }}"
+          if ([string]::IsNullOrWhiteSpace($signingOutcome) -or $signingOutcome -eq "skipped") {
+            $signingOutcome = "${{ steps.azure-sign-timestamped.outcome }}"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($requestedFormat)) { $requestedFormat = "msix" }
+          if ([string]::IsNullOrWhiteSpace($effectiveFormat)) { $effectiveFormat = $requestedFormat }
+
+          $signed = if ($signingOutcome -eq "success") { "yes" } else { "no" }
+          $zipViaSignedFolder = if ($requestedFormat -eq "zip" -and $azureAvailable) { "yes" } else { "no" }
 
           if ([string]::IsNullOrWhiteSpace($buildResult)) {
             $buildResult = "not-run"
@@ -1270,6 +1285,10 @@ jobs:
           |---|---|
           | Application | ``$env:APPLICATION_NAME`` |
           | Targets | ``${{ inputs.targets }}`` |
+          | Requested Windows format | ``$requestedFormat`` |
+          | Effective publish format | ``$effectiveFormat`` |
+          | Output signed | **$signed** |
+          | ZIP requested with Azure signing | **$zipViaSignedFolder** |
           | Artifact | ``${{ inputs.artifact-name }}`` |
           | Build | **$buildResult** |
           | SFTP upload | **$sftpResult** |
