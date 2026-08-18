@@ -749,7 +749,7 @@ jobs:
               Length
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-name }}
           path: ${{ env.OUTPUT_DIRECTORY }}\artifacts\*.msix
