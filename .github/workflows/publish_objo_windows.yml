@@ -37,6 +37,12 @@ on:
         type: string
         default: "win-x64"
 
+      windows-format:
+        description: Windows output format (MSIX, folder, or zip)
+        required: false
+        type: string
+        default: "MSIX"
+
       artifact-name:
         description: Uploaded artifact name
         required: false
@@ -122,6 +128,7 @@ jobs:
       PROJECT_FILE: ${{ inputs.project-file }}
       APPLICATION_NAME: ${{ inputs.application-name }}
       APP_VERSION: ${{ inputs.app-version }}
+      WINDOWS_FORMAT: ${{ inputs.windows-format }}
 
       AZURE_ENDPOINT: ${{ secrets.azure-endpoint }}
       AZURE_ACCOUNT_NAME: ${{ secrets.azure-account-name }}
@@ -164,6 +171,32 @@ jobs:
           else {
             Write-Host "Azure Trusted Signing is disabled because one or more required secrets were not provided."
           }
+
+      - name: Resolve Windows output format
+        id: windows-format
+        shell: pwsh
+        env:
+          AZURE_SIGNING_AVAILABLE: ${{ steps.azure-signing.outputs.available }}
+        run: |
+          $format = $env:WINDOWS_FORMAT.Trim().ToLowerInvariant()
+          if ([string]::IsNullOrWhiteSpace($format)) { $format = "msix" }
+
+          if ($format -notin @("msix", "folder", "zip")) {
+            throw "windows-format must be MSIX, folder, or zip. Received: $env:WINDOWS_FORMAT"
+          }
+
+          $requestedFormat = $format
+          if ($format -eq "zip" -and $env:AZURE_SIGNING_AVAILABLE -eq "true") {
+            $format = "folder"
+            Write-Host "Azure signing is enabled; publishing a folder so its contents can be signed before zipping."
+          }
+
+          "requested=$requestedFormat" >> $env:GITHUB_OUTPUT
+          "effective=$format" >> $env:GITHUB_OUTPUT
+          "signing-filter=$(if ($format -eq 'msix') { 'msix' } else { 'exe,dll' })" >> $env:GITHUB_OUTPUT
+          "EFFECTIVE_WINDOWS_FORMAT=$format" >> $env:GITHUB_ENV
+          Write-Host "Requested Windows format: $requestedFormat"
+          Write-Host "Effective Windows format: $format"
 
       - name: Validate SFTP configuration
         id: sftp-config
@@ -599,6 +632,8 @@ jobs:
       
           $arguments += "--output"
           $arguments += $env:OUTPUT_DIRECTORY
+          $arguments += "--windows-format"
+          $arguments += $env:EFFECTIVE_WINDOWS_FORMAT
 
           if ($env:OBJO_LICENSE_MODE -eq "temporary") {
             $arguments += "--license-key-env"
@@ -646,6 +681,7 @@ jobs:
           }
 
       - name: Azure Trusted Signing (with timestamp)
+        id: azure-sign-timestamped
         if: ${{ steps.azure-signing.outputs.available == 'true' && env.AZURE_TIMESTAMP_URL != '' }}
         uses: azure/trusted-signing-action@v2
         with:
@@ -659,7 +695,7 @@ jobs:
           certificate-profile-name: ${{ secrets.azure-certificate-profile-name }}
 
           files-folder: ${{ env.OUTPUT_DIRECTORY }}
-          files-folder-filter: msix
+          files-folder-filter: ${{ steps.windows-format.outputs.signing-filter }}
           files-folder-recurse: true
 
           file-digest: SHA256
@@ -668,6 +704,7 @@ jobs:
           timestamp-digest: SHA256
           
       - name: Azure Trusted Signing
+        id: azure-sign
         if: ${{ steps.azure-signing.outputs.available == 'true' && env.AZURE_TIMESTAMP_URL == '' }}
         uses: azure/trusted-signing-action@v2
         with:
@@ -681,7 +718,7 @@ jobs:
           certificate-profile-name: ${{ secrets.azure-certificate-profile-name }}
 
           files-folder: ${{ env.OUTPUT_DIRECTORY }}
-          files-folder-filter: msix
+          files-folder-filter: ${{ steps.windows-format.outputs.signing-filter }}
           files-folder-recurse: true
 
           file-digest: SHA256
@@ -689,6 +726,8 @@ jobs:
 
       - name: Collect Windows packages
         shell: pwsh
+        env:
+          REQUESTED_WINDOWS_FORMAT: ${{ steps.windows-format.outputs.requested }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -702,42 +741,46 @@ jobs:
             -Path $artifactDirectory |
             Out-Null
 
-          $packageCount = 0
+          if ($env:EFFECTIVE_WINDOWS_FORMAT -eq "folder") {
+            $destination = Join-Path $artifactDirectory "$($env:APPLICATION_NAME).zip"
+            $items = Get-ChildItem -LiteralPath $env:OUTPUT_DIRECTORY -Force |
+              Where-Object { $_.FullName -ne $artifactDirectory }
+            if ($items.Count -eq 0) { throw "The Windows output folder is empty." }
+            Compress-Archive -Path $items.FullName -DestinationPath $destination -Force
+            Write-Host "Packaged signed Windows folder: $destination"
+          }
+          else {
+            $extension = if ($env:EFFECTIVE_WINDOWS_FORMAT -eq "zip") { "*.zip" } else { "*.msix" }
+            $packages = @(Get-ChildItem -Path $env:OUTPUT_DIRECTORY -Recurse -Filter $extension -File |
+              Where-Object { $_.DirectoryName -ne $artifactDirectory })
 
-          Get-ChildItem `
-            -Path $env:OUTPUT_DIRECTORY `
-            -Recurse `
-            -Filter *.msix |
-          ForEach-Object {
+            if ($packages.Count -eq 0) { throw "No Windows $extension packages were found." }
+
+            foreach ($package in $packages) {
 
             $destination = Join-Path `
               $artifactDirectory `
-              $_.Name
+              $package.Name
 
             if (Test-Path $destination) {
 
               $parentFolder = Split-Path `
-                $_.DirectoryName `
+                $package.DirectoryName `
                 -Leaf
 
               $destination = Join-Path `
                 $artifactDirectory `
-                "$($env:APPLICATION_NAME)-$parentFolder.msix"
+                "$($env:APPLICATION_NAME)-$parentFolder$($package.Extension)"
             }
 
             Copy-Item `
-              $_.FullName `
+              $package.FullName `
               $destination `
               -Force
 
             Write-Host "Collected:"
-            Write-Host "  $($_.FullName)"
-
-            $packageCount++
-          }
-
-          if ($packageCount -eq 0) {
-            throw "No MSIX packages were found."
+            Write-Host "  $($package.FullName)"
+            }
           }
 
           Write-Host ""
@@ -752,7 +795,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-name }}
-          path: ${{ env.OUTPUT_DIRECTORY }}\artifacts\*.msix
+          path: ${{ env.OUTPUT_DIRECTORY }}\artifacts\*
           if-no-files-found: error
 
       - name: Find SFTP-capable curl
@@ -1213,6 +1256,19 @@ jobs:
         run: |
           $buildResult = "${{ steps.publish.outcome }}"
           $sftpResult = "${{ steps.sftp-result.outputs.result }}"
+          $requestedFormat = "${{ steps.windows-format.outputs.requested }}"
+          $effectiveFormat = "${{ steps.windows-format.outputs.effective }}"
+          $azureAvailable = "${{ steps.azure-signing.outputs.available }}" -eq "true"
+          $signingOutcome = "${{ steps.azure-sign.outcome }}"
+          if ([string]::IsNullOrWhiteSpace($signingOutcome) -or $signingOutcome -eq "skipped") {
+            $signingOutcome = "${{ steps.azure-sign-timestamped.outcome }}"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($requestedFormat)) { $requestedFormat = "msix" }
+          if ([string]::IsNullOrWhiteSpace($effectiveFormat)) { $effectiveFormat = $requestedFormat }
+
+          $signed = if ($signingOutcome -eq "success") { "yes" } else { "no" }
+          $zipViaSignedFolder = if ($requestedFormat -eq "zip" -and $azureAvailable) { "yes" } else { "no" }
 
           if ([string]::IsNullOrWhiteSpace($buildResult)) {
             $buildResult = "not-run"
@@ -1229,6 +1285,10 @@ jobs:
           |---|---|
           | Application | ``$env:APPLICATION_NAME`` |
           | Targets | ``${{ inputs.targets }}`` |
+          | Requested Windows format | ``$requestedFormat`` |
+          | Effective publish format | ``$effectiveFormat`` |
+          | Output signed | **$signed** |
+          | ZIP requested with Azure signing | **$zipViaSignedFolder** |
           | Artifact | ``${{ inputs.artifact-name }}`` |
           | Build | **$buildResult** |
           | SFTP upload | **$sftpResult** |
