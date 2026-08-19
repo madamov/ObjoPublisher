@@ -13,6 +13,12 @@ on:
         required: true
         type: string
 
+      resource-files:
+        description: Newline-separated file paths to copy into the project's Resources/Files directory
+        required: false
+        type: string
+        default: ""
+
       application-name:
         description: Application name; leave empty to use the Name from project.json
         required: false
@@ -308,6 +314,34 @@ jobs:
           Get-Content $env:PROJECT_FILE -Raw |
               ConvertFrom-Json |
               Out-Null
+
+      - name: Copy resource files into the project
+        shell: pwsh
+        env:
+          RESOURCE_FILES: ${{ inputs.resource-files }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:RESOURCE_FILES)) {
+            Write-Host "No additional resource files were provided."
+            exit 0
+          }
+
+          $projectDirectory = Split-Path -Parent $env:PROJECT_FILE
+          $resourceDirectory = Join-Path $projectDirectory "Resources/Files"
+          New-Item -ItemType Directory -Path $resourceDirectory -Force | Out-Null
+
+          foreach ($source in ($env:RESOURCE_FILES -split "\r?\n")) {
+            if ([string]::IsNullOrWhiteSpace($source)) { continue }
+
+            if (!(Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "Resource file was not found: $source"
+            }
+
+            $destination = Join-Path $resourceDirectory (Split-Path -Leaf $source)
+            Copy-Item -LiteralPath $source -Destination $destination -Force
+            Write-Host "Copied resource file: $source -> $destination"
+          }
 
 
       - name: Configure application name in project.json

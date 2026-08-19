@@ -245,6 +245,7 @@ Write workflow summary
 |--------|:-------:|---------|-------------|
 | `solution-file` | ✔ | | Path to the Objo solution file. |
 | `project-file` | ✔ | | Path to `project.json`. |
+| `resource-files` | | empty | Newline-separated file paths copied into the project's `Resources/Files` directory before publishing. |
 | `application-name` | ✔ | | Application name used when collecting artifacts. |
 | `app-version` | | empty | Semantic application version. Valid values update `MajorVersion`, `MinorVersion`, and `PatchVersion`; empty or invalid values leave them unchanged. |
 | `output-directory` | | `Publish` | Output directory under `$HOME/Documents`. |
@@ -403,6 +404,7 @@ jobs:
     with:
       solution-file: MyGreatApp.objosln
       project-file: Projects/MyGreatApp/project.json
+      resource-files: RELEASE_NOTES.md
       application-name: MyGreatApp
       output-directory: Publish
       targets: "osx-arm64, osx-x64"
@@ -502,6 +504,7 @@ Write workflow summary
 |--------|:-------:|---------|-------------|
 | `solution-file` | ✔ | | Path to the Objo solution file. |
 | `project-file` | ✔ | | Path to `project.json`. |
+| `resource-files` | | empty | Newline-separated file paths copied into the project's `Resources/Files` directory before publishing. |
 | `application-name` | ✔ | | Application name used when naming uploaded artifacts. |
 | `app-version` | | empty | Semantic application version. Valid values update `MajorVersion`, `MinorVersion`, and `PatchVersion`; empty or invalid values leave them unchanged. |
 | `output-directory` | | `Publish` | Output directory under the current user's home directory. |
@@ -639,6 +642,7 @@ jobs:
     with:
       solution-file: MyGreatApp.objosln
       project-file: Projects/MyGreatApp/project.json
+      resource-files: RELEASE_NOTES.md
       application-name: MyGreatApp
       output-directory: Publish
       targets: "linux-x64"
@@ -744,6 +748,7 @@ Write workflow summary
 |--------|:-------:|---------|-------------|
 | `solution-file` | ✔ | | Path to the Objo solution file. |
 | `project-file` | ✔ | | Path to `project.json`. |
+| `resource-files` | | empty | Newline-separated file paths copied into the project's `Resources/Files` directory before publishing. |
 | `application-name` | ✔ | | Application name used when collecting artifacts and generating the default correlation ID. |
 | `app-version` | | empty | Semantic application version. Valid values update `MajorVersion`, `MinorVersion`, and `PatchVersion`; empty or invalid values leave them unchanged. |
 | `output-directory` | | `Publish` | Output directory under the current Windows user's home directory. |
@@ -974,6 +979,7 @@ jobs:
     with:
       solution-file: MyGreatApp.objosln
       project-file: Projects/MyGreatApp/project.json
+      resource-files: RELEASE_NOTES.md
       application-name: MyGreatApp
       output-directory: Publish
       targets: "win-x64"
@@ -1091,6 +1097,7 @@ Upload artifacts
 |--------|:-------:|---------|-------------|
 | `solution-file` | ✔ | | Path to the Objo solution file. |
 | `project-file` | ✔ | | Path to `project.json`. |
+| `resource-files` | | empty | Newline-separated file paths copied into the project's `Resources/Files` directory before publishing. |
 | `application-name` | ✔ | | Application name used when generating the default Azure correlation ID and naming artifacts. |
 | `app-version` | | empty | Semantic application version. Valid values update `MajorVersion`, `MinorVersion`, and `PatchVersion`; empty or invalid values leave them unchanged. |
 | `output-directory` | | `Publish` | Output directory under the current Windows user's home directory. |
@@ -1292,6 +1299,7 @@ jobs:
     with:
       solution-file: MyGreatApp.objosln
       project-file: Projects/MyGreatApp/project.json
+      resource-files: RELEASE_NOTES.md
       application-name: MyGreatApp
       output-directory: Publish
       targets: "win-x64"
