@@ -37,6 +37,12 @@ on:
         type: string
         default: ""
 
+      include-app-version-in-release-name:
+        description: Include the application version in release archive filenames
+        required: false
+        type: boolean
+        default: false
+
       output-directory:
         description: Directory inside the current user's home directory
         required: false
@@ -140,6 +146,8 @@ jobs:
       PROJECT_FILE: ${{ inputs.project-file }}
       APPLICATION_NAME: ${{ inputs.application-name }}
       APP_VERSION: ${{ inputs.app-version }}
+      INCLUDE_APP_VERSION_IN_RELEASE_NAME: ${{ inputs.include-app-version-in-release-name }}
+      RELEASE_TARGETS: ${{ inputs.targets }}
       WINDOWS_FORMAT: ${{ inputs.windows-format }}
 
       AZURE_ENDPOINT: ${{ secrets.azure-endpoint }}
@@ -404,6 +412,19 @@ jobs:
           else
             echo "Application version is empty or invalid; leaving version keys in project.json unchanged."
           fi
+
+          RELEASE_NAME="$APPLICATION_NAME"
+          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == "true" ]]; then
+            if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+              APP_VERSION="$(jq -er '[.MajorVersion // 0, .MinorVersion // 0, .PatchVersion // 0] | map(tostring) | join(".")' "$PROJECT_FILE")"
+            fi
+            if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+              echo "Cannot name release archives: project application version is invalid." >&2
+              exit 1
+            fi
+            RELEASE_NAME="${APPLICATION_NAME}-${APP_VERSION}"
+          fi
+          echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_ENV"
 
       - name: Determine Objo Studio version
         id: version
@@ -790,6 +811,21 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
+          function Get-ReleaseFilename([string] $originalName, [string] $extension, [string] $sourcePath = "") {
+            if ($env:INCLUDE_APP_VERSION_IN_RELEASE_NAME -ne "true") { return $originalName }
+            $suffix = $originalName.Substring([Math]::Min($env:APPLICATION_NAME.Length, $originalName.Length))
+            if ($originalName.StartsWith("$($env:APPLICATION_NAME)-") -and $suffix -match '^-win-') {
+              return "$($env:RELEASE_NAME)$suffix"
+            }
+            $targets = @($env:RELEASE_TARGETS.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            $target = $targets -join '-'
+            if ($sourcePath -match '(?:^|[\\/])(win-[A-Za-z0-9_-]+)(?:[\\/]|$)') {
+              $target = $Matches[1]
+            }
+            $format = if ($extension -eq '.zip') { '-portable' } else { '' }
+            return "$($env:RELEASE_NAME)-$target$format$extension"
+          }
+
           $artifactDirectory = Join-Path `
             $env:OUTPUT_DIRECTORY `
             "artifacts"
@@ -801,7 +837,7 @@ jobs:
             Out-Null
 
           if ($env:EFFECTIVE_WINDOWS_FORMAT -eq "folder") {
-            $destination = Join-Path $artifactDirectory "$($env:APPLICATION_NAME).zip"
+            $destination = Join-Path $artifactDirectory (Get-ReleaseFilename "$($env:APPLICATION_NAME).zip" ".zip")
             $items = Get-ChildItem -LiteralPath $env:OUTPUT_DIRECTORY -Force |
               Where-Object { $_.FullName -ne $artifactDirectory }
             if ($items.Count -eq 0) { throw "The Windows output folder is empty." }
@@ -819,7 +855,7 @@ jobs:
 
             $destination = Join-Path `
               $artifactDirectory `
-              $package.Name
+              (Get-ReleaseFilename $package.Name $package.Extension $package.DirectoryName)
 
             if (Test-Path $destination) {
 
@@ -829,7 +865,7 @@ jobs:
 
               $destination = Join-Path `
                 $artifactDirectory `
-                "$($env:APPLICATION_NAME)-$parentFolder$($package.Extension)"
+                "$($env:RELEASE_NAME)-$parentFolder$($package.Extension)"
             }
 
             Copy-Item `
