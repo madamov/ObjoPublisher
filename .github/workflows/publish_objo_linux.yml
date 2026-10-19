@@ -43,6 +43,12 @@ on:
         type: string
         default: ""
 
+      include-app-version-in-release-name:
+        description: Include the application version in release archive filenames
+        required: false
+        type: boolean
+        default: false
+
       sftp-url:
         description: Base SFTP URL for artifact upload
         required: false
@@ -101,6 +107,8 @@ jobs:
       PROJECT_FILE: ${{ inputs.project-file }}
       APPLICATION_NAME: ${{ inputs.application-name }}
       APP_VERSION: ${{ inputs.app-version }}
+      INCLUDE_APP_VERSION_IN_RELEASE_NAME: ${{ inputs.include-app-version-in-release-name }}
+      RELEASE_TARGETS: ${{ inputs.targets }}
       OBJO_LICENSE_KEY: ${{ secrets.objo-license }}
 
     outputs:
@@ -407,6 +415,19 @@ jobs:
           else
             echo "Application version is empty or invalid; leaving version keys in project.json unchanged."
           fi
+
+          RELEASE_NAME="$APPLICATION_NAME"
+          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == "true" ]]; then
+            if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+              APP_VERSION="$(jq -er '[.MajorVersion // 0, .MinorVersion // 0, .PatchVersion // 0] | map(tostring) | join(".")' "$PROJECT_FILE")"
+            fi
+            if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+              echo "Cannot name release archives: project application version is invalid." >&2
+              exit 1
+            fi
+            RELEASE_NAME="${APPLICATION_NAME}-${APP_VERSION}"
+          fi
+          echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_ENV"
           
       - name: Determine Objo Studio version
         id: version
@@ -652,11 +673,27 @@ jobs:
                 ;;
             esac
 
-            destination="$ARTIFACT_DIR/${APPLICATION_NAME}-${target_name}.${extension}"
+            if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == "true" ]]; then
+              # Handoff may be nested below the runtime directory.
+              if [[ "$archive" =~ (linux-[A-Za-z0-9_-]+) ]]; then
+                target_name="${BASH_REMATCH[1]}"
+              elif [[ "$RELEASE_TARGETS" != *,* ]]; then
+                target_name="$(printf '%s' "$RELEASE_TARGETS" | tr -d '[:space:]')"
+              else
+                echo "Cannot determine Linux runtime for archive: $archive" >&2
+                exit 1
+              fi
+            fi
+
+            destination="$ARTIFACT_DIR/${RELEASE_NAME}-${target_name}.${extension}"
 
             # Avoid overwriting if two archives resolve to the same name.
             if [[ -e "$destination" ]]; then
-              destination="$ARTIFACT_DIR/${APPLICATION_NAME}-${archive_count}.${extension}"
+              if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == "true" ]]; then
+                destination="$ARTIFACT_DIR/${RELEASE_NAME}-${target_name}-${archive_count}.${extension}"
+              else
+                destination="$ARTIFACT_DIR/${APPLICATION_NAME}-${archive_count}.${extension}"
+              fi
             fi
 
             cp "$archive" "$destination"

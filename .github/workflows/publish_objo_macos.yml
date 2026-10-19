@@ -49,6 +49,12 @@ on:
         type: string
         default: ""
 
+      include-app-version-in-release-name:
+        description: Include the application version in release archive filenames
+        required: false
+        type: boolean
+        default: false
+
       artifact-name:
         description: Uploaded artifact name
         required: false
@@ -137,6 +143,8 @@ jobs:
       SOLUTION_FILE: ${{ inputs.solution-file }}
       APPLICATION_NAME: ${{ inputs.application-name }}
       APP_VERSION: ${{ inputs.app-version }}
+      INCLUDE_APP_VERSION_IN_RELEASE_NAME: ${{ inputs.include-app-version-in-release-name }}
+      RELEASE_TARGETS: ${{ inputs.targets }}
 
     steps:
       - name: Validate SFTP configuration
@@ -469,6 +477,19 @@ jobs:
           else
             echo "Application version is empty or invalid; leaving version keys in project.json unchanged."
           fi
+
+          RELEASE_NAME="$APPLICATION_NAME"
+          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == "true" ]]; then
+            if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+              APP_VERSION="$(jq -er '[.MajorVersion // 0, .MinorVersion // 0, .PatchVersion // 0] | map(tostring) | join(".")' "$PROJECT_FILE")"
+            fi
+            if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+              echo "Cannot name release archives: project application version is invalid." >&2
+              exit 1
+            fi
+            RELEASE_NAME="${APPLICATION_NAME}-${APP_VERSION}"
+          fi
+          echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_ENV"
 
       - name: Install Apple signing certificate
         if: steps.apple-signing.outputs.available == 'true'
@@ -842,9 +863,9 @@ jobs:
 
           if [[ -f "$ARM_DMG" ]]; then
             cp "$ARM_DMG" \
-              "$ARTIFACT_DIR/$APPLICATION_NAME-macOS-Apple-Silicon.dmg"
+              "$ARTIFACT_DIR/$RELEASE_NAME-macOS-Apple-Silicon.dmg"
             echo "Collected Apple Silicon DMG."
-            ((found++))
+            ((found += 1))
           else
             echo "Apple Silicon DMG not found, skipping:"
             echo "  $ARM_DMG"
@@ -852,9 +873,9 @@ jobs:
 
           if [[ -f "$INTEL_DMG" ]]; then
             cp "$INTEL_DMG" \
-              "$ARTIFACT_DIR/$APPLICATION_NAME-macOS-Intel.dmg"
+              "$ARTIFACT_DIR/$RELEASE_NAME-macOS-Intel.dmg"
             echo "Collected Intel DMG."
-            ((found++))
+            ((found += 1))
           else
             echo "Intel DMG not found, skipping:"
             echo "  $INTEL_DMG"
