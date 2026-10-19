@@ -1135,6 +1135,15 @@ jobs:
           $uploadFailed = $false
           $uploadError = ""
 
+          $knownHosts = Join-Path $HOME ".ssh/known_hosts"
+          
+          if ($env:SFTP_CURL -like "C:\msys64\usr\bin\*") {
+            $knownHosts = & "C:\msys64\usr\bin\cygpath.exe" -u $knownHosts
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not convert known_hosts path."
+            }
+          }
+
           #
           # Validate curl.
           #
@@ -1240,6 +1249,7 @@ jobs:
                 --show-error `
                 --silent `
                 --ftp-create-dirs `
+                --knownhosts $knownHosts `
                 --user "${env:SFTP_USER}:${env:SFTP_PASSWORD}" `
                 --upload-file $file.FullName `
                 $remoteUrl
