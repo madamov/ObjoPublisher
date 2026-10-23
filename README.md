@@ -86,6 +86,8 @@ with:
 
 When supplied, it must be a non-negative integer without leading zeros. The workflow writes it with a trailing newline to the project's `Resources/Files/BUILD_NUMBER.txt` after copying other resources and before publishing. This reserved filename is overwritten when a build number is supplied. Objo includes the file in the published application's resources; it is accessible at runtime through `SpecialFolder.Resources`. This does not change native version metadata such as macOS `CFBundleVersion` or Windows file versions.
 
+When `build-number` is supplied, the workflows inspect every collected artifact before GitHub artifact or SFTP upload. macOS DMGs are mounted read-only and checked inside each app bundle; Windows ZIP/MSIX packages and Linux ZIP/tar.gz/tgz archives are read directly. Publishing fails if the resource is missing or its bytes differ from the supplied number followed by a newline. DMGs are detached even when validation fails. Run the packaged-resource regression tests locally with `python3 -m unittest discover -s tests -v`.
+
 Omitting the input or passing an empty string leaves existing resources unchanged. Invalid nonempty values fail the workflow before publishing. The application version remains controlled separately by `app-version`.
 
 ---

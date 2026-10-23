@@ -913,6 +913,45 @@ jobs:
           echo "Prepared artifacts:"
           ls -lh "$ARTIFACT_DIR"
 
+      - name: Verify packaged build number
+        if: inputs.build-number != ''
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ inputs.build-number }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          import subprocess
+          import tempfile
+
+          expected = (os.environ["BUILD_NUMBER"] + "\n").encode("utf-8")
+          artifact_dir = Path(os.environ["OUTPUT_DIRECTORY"]) / "artifacts"
+          artifacts = sorted(artifact_dir.glob("*.dmg"))
+          if not artifacts:
+              raise SystemExit("No published DMGs found to verify.")
+
+          for artifact in artifacts:
+              with tempfile.TemporaryDirectory(prefix="objo-build-check-") as mount:
+                  subprocess.run(["hdiutil", "attach", str(artifact), "-readonly", "-nobrowse", "-mountpoint", mount], check=True)
+                  try:
+                      apps = sorted(Path(mount).glob("*.app"))
+                      if not apps:
+                          raise SystemExit(f"No application bundle found in {artifact.name}")
+                      for app in apps:
+                          resources = [path for path in (app / "Contents" / "Resources").rglob("BUILD_NUMBER.txt")
+                                       if path.parts[-3:] == ("Resources", "Files", "BUILD_NUMBER.txt") and path.is_file()]
+                          if not resources:
+                              raise SystemExit(f"Missing Resources/Files/BUILD_NUMBER.txt in {artifact.name}: {app.name}")
+                          for resource in resources:
+                              content = resource.read_bytes()
+                              if content != expected:
+                                  raise SystemExit(f"Wrong build number in {artifact.name}: {resource.relative_to(mount)}; expected {expected!r}, got {content!r}")
+                              print(f"Verified {artifact.name}: {resource.relative_to(mount)} contains build {os.environ['BUILD_NUMBER']}")
+                  finally:
+                      subprocess.run(["hdiutil", "detach", mount], check=True)
+          PYTHON
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v7
         with:

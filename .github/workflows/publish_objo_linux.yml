@@ -747,6 +747,49 @@ jobs:
           echo "Prepared Linux artifacts:"
           ls -lh "$ARTIFACT_DIR"
           
+      - name: Verify packaged build number
+        if: inputs.build-number != ''
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ inputs.build-number }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path, PurePosixPath
+          import tarfile
+          import zipfile
+
+          expected = (os.environ["BUILD_NUMBER"] + "\n").encode("utf-8")
+          artifact_dir = Path(os.environ["OUTPUT_DIRECTORY"]) / "artifacts"
+          artifacts = sorted(path for path in artifact_dir.iterdir() if path.is_file())
+          if not artifacts:
+              raise SystemExit("No published artifacts found to verify.")
+
+          for artifact in artifacts:
+              resources = []
+              if artifact.suffix.lower() in (".zip", ".msix"):
+                  with zipfile.ZipFile(artifact) as archive:
+                      for entry in archive.infolist():
+                          name = entry.filename.replace("\\", "/")
+                          if not entry.is_dir() and PurePosixPath(name).parts[-3:] == ("Resources", "Files", "BUILD_NUMBER.txt"):
+                              resources.append((name, archive.read(entry)))
+              elif artifact.name.endswith((".tar.gz", ".tgz")):
+                  with tarfile.open(artifact, "r:gz") as archive:
+                      for entry in archive.getmembers():
+                          if entry.isfile() and PurePosixPath(entry.name).parts[-3:] == ("Resources", "Files", "BUILD_NUMBER.txt"):
+                              with archive.extractfile(entry) as resource:
+                                  resources.append((entry.name, resource.read()))
+              else:
+                  raise SystemExit(f"Unsupported published artifact: {artifact}")
+
+              if not resources:
+                  raise SystemExit(f"Missing Resources/Files/BUILD_NUMBER.txt in {artifact.name}")
+              for name, content in resources:
+                  if content != expected:
+                      raise SystemExit(f"Wrong build number in {artifact.name}: {name}; expected {expected!r}, got {content!r}")
+                  print(f"Verified {artifact.name}: {name} contains build {os.environ['BUILD_NUMBER']}")
+          PYTHON
+
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7
         with:
