@@ -38,7 +38,7 @@ on:
         default: ""
 
       build-number:
-        description: Non-negative integer bundled as Resources/Files/BUILD_NUMBER.txt; empty leaves resources unchanged
+        description: Non-negative integer bundled with version and UTC build timestamp as Resources/Files/BUILD_NUMBER.json
         required: false
         type: string
         default: ""
@@ -403,24 +403,6 @@ jobs:
             echo "Using application name from project.json: $APPLICATION_NAME"
           fi
 
-      - name: Bundle build number as an application resource
-        if: inputs.build-number != ''
-        shell: bash
-        env:
-          BUILD_NUMBER: ${{ inputs.build-number }}
-        run: |
-          set -euo pipefail
-
-          if [[ ! "$BUILD_NUMBER" =~ ^(0|[1-9][0-9]*)$ ]]; then
-            echo "build-number must be a non-negative integer without leading zeros." >&2
-            exit 1
-          fi
-
-          RESOURCE_DIRECTORY="$(dirname "$PROJECT_FILE")/Resources/Files"
-          mkdir -p "$RESOURCE_DIRECTORY"
-          printf '%s\n' "$BUILD_NUMBER" > "$RESOURCE_DIRECTORY/BUILD_NUMBER.txt"
-          echo "Bundled build number: $BUILD_NUMBER"
-
       - name: Configure application version in project.json
         shell: bash
         run: |
@@ -453,6 +435,48 @@ jobs:
           fi
           echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_ENV"
           
+      - name: Bundle build number as an application resource
+        if: inputs.build-number != ''
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ inputs.build-number }}
+        run: |
+          python3 - <<'PYTHON'
+          import datetime
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          number = os.environ["BUILD_NUMBER"]
+          if not re.fullmatch(r"0|[1-9][0-9]*", number):
+              raise SystemExit("build-number must be a non-negative integer without leading zeros.")
+          project_path = Path(os.environ["PROJECT_FILE"])
+          project = json.loads(project_path.read_text(encoding="utf-8"))
+          version = os.environ["APP_VERSION"]
+          if not re.fullmatch('^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$', version):
+              settings = project.get("BuildSettings", project)
+              version = ".".join(str(settings.get(key, 0)) for key in ("MajorVersion", "MinorVersion", "PatchVersion"))
+              if not re.fullmatch('^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\\+([0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*))?$', version):
+                  raise SystemExit("Cannot determine a valid application version for build metadata.")
+          metadata = {
+              "version": version,
+              "build_number": int(number),
+              "built_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+          }
+          content = (json.dumps(metadata, indent=2) + "\n").encode("utf-8")
+          resources = project_path.parent / "Resources" / "Files"
+          resources.mkdir(parents=True, exist_ok=True)
+          (resources / "BUILD_NUMBER.json").write_bytes(content)
+          (resources / "BUILD_NUMBER.txt").unlink(missing_ok=True)
+          # Keep an independent copy so packaged files must match all generated fields.
+          expected_path = Path(os.environ["RUNNER_TEMP"]) / "objo-build-metadata.json"
+          expected_path.write_bytes(content)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
+              environment.write(f"BUILD_METADATA_PATH={expected_path}\n")
+          print(content.decode("utf-8"), end="")
+          PYTHON
+
       - name: Determine Objo Studio version
         id: version
         shell: bash
@@ -759,7 +783,7 @@ jobs:
           import tarfile
           import zipfile
 
-          expected = (os.environ["BUILD_NUMBER"] + "\n").encode("utf-8")
+          expected = Path(os.environ["BUILD_METADATA_PATH"]).read_bytes()
           artifact_dir = Path(os.environ["OUTPUT_DIRECTORY"]) / "artifacts"
           artifacts = sorted(path for path in artifact_dir.iterdir() if path.is_file())
           if not artifacts:
@@ -771,22 +795,22 @@ jobs:
                   with zipfile.ZipFile(artifact) as archive:
                       for entry in archive.infolist():
                           name = entry.filename.replace("\\", "/")
-                          if not entry.is_dir() and PurePosixPath(name).parts[-3:] == ("Resources", "Files", "BUILD_NUMBER.txt"):
+                          if not entry.is_dir() and PurePosixPath(name).parts[-3:] == ("Resources", "Files", "BUILD_NUMBER.json"):
                               resources.append((name, archive.read(entry)))
               elif artifact.name.endswith((".tar.gz", ".tgz")):
                   with tarfile.open(artifact, "r:gz") as archive:
                       for entry in archive.getmembers():
-                          if entry.isfile() and PurePosixPath(entry.name).parts[-3:] == ("Resources", "Files", "BUILD_NUMBER.txt"):
+                          if entry.isfile() and PurePosixPath(entry.name).parts[-3:] == ("Resources", "Files", "BUILD_NUMBER.json"):
                               with archive.extractfile(entry) as resource:
                                   resources.append((entry.name, resource.read()))
               else:
                   raise SystemExit(f"Unsupported published artifact: {artifact}")
 
               if not resources:
-                  raise SystemExit(f"Missing Resources/Files/BUILD_NUMBER.txt in {artifact.name}")
+                  raise SystemExit(f"Missing Resources/Files/BUILD_NUMBER.json in {artifact.name}")
               for name, content in resources:
                   if content != expected:
-                      raise SystemExit(f"Wrong build number in {artifact.name}: {name}; expected {expected!r}, got {content!r}")
+                      raise SystemExit(f"Wrong build metadata in {artifact.name}: {name}; expected {expected!r}, got {content!r}")
                   print(f"Verified {artifact.name}: {name} contains build {os.environ['BUILD_NUMBER']}")
           PYTHON
 
