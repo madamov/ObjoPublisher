@@ -34,6 +34,12 @@ on:
         type: string
         default: ""
 
+      build-number:
+        description: Non-negative integer bundled as Resources/Files/BUILD_NUMBER.txt; empty leaves resources unchanged
+        required: false
+        type: string
+        default: ""
+
       app-version:
         description: Semantic application version; invalid or empty values leave project.json unchanged
         required: false
@@ -386,6 +392,24 @@ jobs:
             echo "APPLICATION_NAME=$APPLICATION_NAME" >> "$GITHUB_ENV"
             echo "Using application name from project.json: $APPLICATION_NAME"
           fi
+
+      - name: Bundle build number as an application resource
+        if: inputs.build-number != ''
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ inputs.build-number }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$BUILD_NUMBER" =~ ^(0|[1-9][0-9]*)$ ]]; then
+            echo "build-number must be a non-negative integer without leading zeros." >&2
+            exit 1
+          fi
+
+          RESOURCE_DIRECTORY="$(dirname "$PROJECT_FILE")/Resources/Files"
+          mkdir -p "$RESOURCE_DIRECTORY"
+          printf '%s\n' "$BUILD_NUMBER" > "$RESOURCE_DIRECTORY/BUILD_NUMBER.txt"
+          echo "Bundled build number: $BUILD_NUMBER"
 
       - name: Configure application version in project.json
         shell: bash
