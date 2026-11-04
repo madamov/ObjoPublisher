@@ -620,7 +620,6 @@ jobs:
       - name: Publish Linux application
         shell: bash
         env:
-          PUBLISH_TARGETS: ${{ inputs.targets }}
           OBJO_LICENSE_MODE: ${{ steps.version.outputs.license_mode }}
         run: |
           set -euo pipefail
@@ -634,7 +633,7 @@ jobs:
             "$SOLUTION_FILE"
           )
 
-          IFS=',' read -ra TARGET_LIST <<< "$PUBLISH_TARGETS"
+          IFS=',' read -ra TARGET_LIST <<< "$RELEASE_TARGETS"
 
           target_count=0
 
