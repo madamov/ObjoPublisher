@@ -55,6 +55,12 @@ on:
         type: boolean
         default: false
 
+      sftp-path-layout:
+        description: Remote directory layout below sftp-url (platform, version, or version/platform)
+        required: false
+        type: string
+        default: platform
+
       sftp-url:
         description: Base SFTP URL for artifact upload
         required: false
@@ -404,7 +410,10 @@ jobs:
           fi
 
       - name: Configure application version in project.json
+        id: app-version
         shell: bash
+        env:
+          SFTP_PATH_LAYOUT: ${{ inputs.sftp-path-layout }}
         run: |
           set -euo pipefail
 
@@ -422,15 +431,21 @@ jobs:
             echo "Application version is empty or invalid; leaving version keys in project.json unchanged."
           fi
 
-          RELEASE_NAME="$APPLICATION_NAME"
-          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == "true" ]]; then
+          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ||
+                "$SFTP_PATH_LAYOUT" == version || "$SFTP_PATH_LAYOUT" == version/platform ]]; then
             if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
               APP_VERSION="$(jq -er '[.MajorVersion // 0, .MinorVersion // 0, .PatchVersion // 0] | map(tostring) | join(".")' "$PROJECT_FILE")"
             fi
-            if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+            if [[ "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+              echo "version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+            elif [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ]]; then
               echo "Cannot name release archives: project application version is invalid." >&2
               exit 1
             fi
+          fi
+
+          RELEASE_NAME="$APPLICATION_NAME"
+          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ]]; then
             RELEASE_NAME="${APPLICATION_NAME}-${APP_VERSION}"
           fi
           echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_ENV"
@@ -561,12 +576,10 @@ jobs:
         if: steps.cache-objo.outputs.cache-hit != 'true'
         shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          URL: ${{ steps.version.outputs.download_url }}
         run: |
           set -euo pipefail
 
-          VERSION="${{ steps.version.outputs.version }}"
-          URL=${{ steps.version.outputs.download_url }}
           ARCHIVE="$RUNNER_TEMP/$(basename "$URL")"
           
           sudo rm -rf /opt/objo-studio
@@ -827,6 +840,8 @@ jobs:
         shell: bash
         env:
           SFTP_BASE_URL: ${{ inputs.sftp-url }}
+          SFTP_PATH_LAYOUT: ${{ inputs.sftp-path-layout }}
+          SFTP_APP_VERSION: ${{ steps.app-version.outputs.version }}
           SFTP_USER: ${{ secrets.sftp-username }}
           SFTP_PASSWORD: ${{ secrets.sftp-password }}
           FAIL_ON_SFTP_ERROR: ${{ inputs.fail-on-sftp-error }}
@@ -879,7 +894,7 @@ jobs:
             if ! grep -qx "sftp" <<< "$protocols"; then
               echo "The installed curl does not support SFTP." >&2
               echo "Supported protocols:" >&2
-              printf '  %s\n' $protocols >&2
+              printf '  %s\n' "${protocols//$'\n'/$'\n  '}" >&2
               exit 1
             fi
 
@@ -918,7 +933,21 @@ jobs:
               exit 1
             fi
 
-            SFTP_DESTINATION="${SFTP_BASE_URL%/}/linux/"
+            case "$SFTP_PATH_LAYOUT" in
+              platform) remote_directory="linux" ;;
+              version) remote_directory="$SFTP_APP_VERSION" ;;
+              version/platform) remote_directory="$SFTP_APP_VERSION/linux" ;;
+              *)
+                echo "::error::sftp-path-layout must be platform, version, or version/platform." >&2
+                return 1
+                ;;
+            esac
+            if [[ "$SFTP_PATH_LAYOUT" != platform && -z "$SFTP_APP_VERSION" ]]; then
+              echo "::error::A versioned SFTP path requires a valid application version." >&2
+              return 1
+            fi
+
+            SFTP_DESTINATION="${SFTP_BASE_URL%/}/$remote_directory/"
 
             echo "Uploading ${#files[@]} file(s) to:"
             echo "  $SFTP_DESTINATION"
