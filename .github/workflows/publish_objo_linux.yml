@@ -935,6 +935,8 @@ jobs:
                 --silent \
                 --ftp-create-dirs \
                 --user "$SFTP_USER:$SFTP_PASSWORD" \
+                --retry 3 \
+                --retry-all-errors \
                 --upload-file "$file" \
                 "${SFTP_DESTINATION}${filename}"
             done
@@ -942,13 +944,14 @@ jobs:
             echo "Linux artifacts uploaded successfully."
           )
 
-          if upload_to_sftp; then
+          upload_to_sftp
+          upload_exit_code=$?
+
+          if (( upload_exit_code == 0 )); then
             echo "SFTP upload completed successfully."
             echo "result=success" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
-          upload_exit_code=$?
 
           echo "::warning::Linux build succeeded, but SFTP upload failed."
           echo "SFTP upload command returned exit code $upload_exit_code."
