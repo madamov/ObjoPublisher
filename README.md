@@ -106,6 +106,7 @@ Set the optional `sftp-path-layout` input to choose where each artifact is uploa
 
 The platform folder is `linux`, `macos`, or `windows`. Versioned layouts use a valid `app-version` input or fall back to the version in `project.json`. This works independently of `include-app-version-in-release-name`. The workflow creates missing remote directories automatically.
 
+SFTP uploads retry each file up to three times after a failed attempt, with curl's default exponential backoff.
 
 The `fail-on-sftp-error` boolean input controls what happens when the application build succeeds but SFTP upload fails.
 

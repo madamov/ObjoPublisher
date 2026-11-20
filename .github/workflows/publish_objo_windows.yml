@@ -159,6 +159,7 @@ jobs:
       APPLICATION_NAME: ${{ inputs.application-name }}
       APP_VERSION: ${{ inputs.app-version }}
       INCLUDE_APP_VERSION_IN_RELEASE_NAME: ${{ inputs.include-app-version-in-release-name }}
+      BUILD_NUMBER: ${{ inputs.build-number }}
       RELEASE_TARGETS: ${{ inputs.targets }}
       WINDOWS_FORMAT: ${{ inputs.windows-format }}
 
@@ -450,8 +451,6 @@ jobs:
       - name: Bundle build number as an application resource
         if: inputs.build-number != ''
         shell: bash
-        env:
-          BUILD_NUMBER: ${{ inputs.build-number }}
         run: |
           python - <<'PYTHON'
           import datetime
@@ -951,8 +950,6 @@ jobs:
       - name: Verify packaged build number
         if: inputs.build-number != ''
         shell: bash
-        env:
-          BUILD_NUMBER: ${{ inputs.build-number }}
         run: |
           python - <<'PYTHON'
           import os
@@ -1412,6 +1409,8 @@ jobs:
                 --ftp-create-dirs `
                 --knownhosts $knownHosts `
                 --user "${env:SFTP_USER}:${env:SFTP_PASSWORD}" `
+                --retry 3 `
+                --retry-all-errors `
                 --upload-file $file.FullName `
                 $remoteUrl
 
