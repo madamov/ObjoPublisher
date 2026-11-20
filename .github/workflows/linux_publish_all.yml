@@ -65,10 +65,10 @@ on:
         description: Linux targets to publish, comma separated
         required: false
         type: string
-        default: linux-x64
+        default: linux-x64,linux-arm64
 
       targets-mac:
-        description: macOS format to publish to, comma separated
+        description: macOS targets to publish, comma separated
         required: false
         type: string
         default: osx-arm64,osx-x64
@@ -77,7 +77,7 @@ on:
         description: Windows targets to publish, comma separated
         required: false
         type: string
-        default: win-x64
+        default: win-x64,win-arm64
 
       artifact-name-linux:
         description: Uploaded Linux artifact name
@@ -97,11 +97,29 @@ on:
         type: string
         default: objo-windows-publish
 
+      sftp-path-layout:
+        description: Remote directory layout below sftp-url (platform, version, or version/platform)
+        required: false
+        type: string
+        default: platform
+
       sftp-url:
         description: Base SFTP URL for artifact upload
         required: false
         type: string
         default: ""
+
+      upload-macos-to-sftp:
+        description: Upload macOS artifacts to SFTP when configured
+        required: false
+        type: boolean
+        default: false
+
+      upload-windows-to-sftp:
+        description: Upload Windows artifacts to SFTP when configured
+        required: false
+        type: boolean
+        default: false
 
       fail-on-sftp-error:
         description: Exit with code 2 if SFTP upload fails
@@ -110,7 +128,61 @@ on:
         default: false
 
 
+      apple-notary-profile:
+        description: Notarytool profile name
+        required: false
+        type: string
+        default: objo-notarization
+
+      azure-correlation-id:
+        description: Azure Trusted Signing correlation ID
+        required: false
+        type: string
+        default: ""
+
     secrets:
+      azure-tenant-id:
+        required: false
+
+      azure-client-id:
+        required: false
+
+      azure-client-secret:
+        required: false
+
+      azure-endpoint:
+        required: false
+
+      azure-account-name:
+        required: false
+
+      azure-certificate-profile-name:
+        required: false
+
+      azure-package-publisher:
+        required: false
+
+      azure-timestamp-url:
+        required: false
+
+      apple-certificate:
+        required: false
+
+      apple-certificate-name:
+        required: false
+
+      apple-certificate-password:
+        required: false
+
+      apple-team-id:
+        required: false
+
+      apple-id:
+        required: false
+
+      apple-app-specific-password:
+        required: false
+
       objo-license:
         required: true
 
@@ -126,7 +198,7 @@ on:
     outputs:
       sftp-upload:
         description: Result of SFTP upload
-        value: ${{ jobs.publish-linux.outputs.sftp-upload }}
+        value: ${{ jobs.upload-sftp.outputs.sftp-upload }}
 
 jobs:
   publish-all:
@@ -139,188 +211,18 @@ jobs:
       APPLICATION_NAME: ${{ inputs.application-name }}
       APP_VERSION: ${{ inputs.app-version }}
       INCLUDE_APP_VERSION_IN_RELEASE_NAME: ${{ inputs.include-app-version-in-release-name }}
-      RELEASE_TARGETS_LINUX: ${{ inputs.targets_linux }}
-      RELEASE_TARGETS_MAC: ${{ inputs.targets_mac }}
-      RELEASE_TARGETS_WINDOWS: ${{ inputs.targets_windows }}
+      RELEASE_TARGETS_LINUX: ${{ inputs.targets-linux }}
+      RELEASE_TARGETS_MAC: ${{ inputs.targets-mac }}
+      RELEASE_TARGETS_WINDOWS: ${{ inputs.targets-windows }}
       OBJO_LICENSE_KEY: ${{ secrets.objo-license }}
 
     outputs:
-      sftp-upload: ${{ steps.sftp-result.outputs.result }}
+      app-version: ${{ steps.app-version.outputs.version }}
+      linux: ${{ steps.upload-linux.outputs.artifact-id }}
+      macos: ${{ steps.upload-macos-handoff.outputs.artifact-id }}
+      windows: ${{ steps.upload-windows-handoff.outputs.artifact-id }}
 
     steps:
-
-      - name: Validate SFTP configuration
-        id: sftp-config
-        shell: bash
-        env:
-          SFTP_URL: ${{ inputs.sftp-url }}
-          SFTP_USER: ${{ secrets.sftp-username }}
-          SFTP_PASSWORD: ${{ secrets.sftp-password }}
-          SFTP_HOST_FINGERPRINT: ${{ secrets.sftp-host-fingerprint }}
-        run: |
-          set -euo pipefail
-
-          provided=()
-          missing=()
-
-          [[ -n "$SFTP_URL" ]] \
-            && provided+=("sftp-url") \
-            || missing+=("sftp-url")
-
-          [[ -n "$SFTP_USER" ]] \
-            && provided+=("sftp-username") \
-            || missing+=("sftp-username")
-
-          [[ -n "$SFTP_PASSWORD" ]] \
-            && provided+=("sftp-password") \
-            || missing+=("sftp-password")
-
-          [[ -n "$SFTP_HOST_FINGERPRINT" ]] \
-            && provided+=("sftp-host-fingerprint") \
-            || missing+=("sftp-host-fingerprint")
-
-          if (( ${#provided[@]} == 0 )); then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "SFTP upload is disabled."
-            echo "No SFTP configuration values were supplied."
-            exit 0
-          fi
-
-          if (( ${#missing[@]} == 0 )); then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "SFTP upload is enabled."
-            echo "All required SFTP configuration values are present."
-            exit 0
-          fi
-
-          echo "::error::Incomplete SFTP configuration."
-
-          echo "Provided:"
-          for item in "${provided[@]}"; do
-            echo "  - $item"
-          done
-
-          echo "Missing:"
-          for item in "${missing[@]}"; do
-            echo "  - $item"
-          done
-
-          echo
-          echo "Either provide all SFTP configuration values or none of them." >&2
-          exit 1
-
-      - name: Verify and trust SFTP server SSH host key
-        if: steps.sftp-config.outputs.enabled == 'true'
-        shell: bash
-        env:
-          SFTP_BASE_URL: ${{ inputs.sftp-url }}
-          EXPECTED_FINGERPRINT: ${{ secrets.sftp-host-fingerprint }}
-        run: |
-          set -euo pipefail
-      
-          if [[ "$SFTP_BASE_URL" != sftp://* ]]; then
-            echo "sftp-url must start with sftp://." >&2
-            exit 1
-          fi
-      
-          #
-          # Strip sftp:// and everything after host[:port].
-          #
-          AUTHORITY="${SFTP_BASE_URL#sftp://}"
-          AUTHORITY="${AUTHORITY%%/*}"
-      
-          #
-          # Remove optional user@.
-          #
-          HOST_PORT="${AUTHORITY##*@}"
-      
-          SFTP_HOST="$HOST_PORT"
-          SFTP_PORT="22"
-      
-          #
-          # Handle host:port.
-          #
-          if [[ "$HOST_PORT" == *:* ]]; then
-            SFTP_HOST="${HOST_PORT%%:*}"
-            SFTP_PORT="${HOST_PORT##*:}"
-          fi
-      
-          if [[ -z "$SFTP_HOST" ]]; then
-            echo "Could not extract SFTP hostname." >&2
-            exit 1
-          fi
-      
-          echo "SFTP host: $SFTP_HOST"
-          echo "SFTP port: $SFTP_PORT"
-      
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-      
-          SCANNED_KEYS="$RUNNER_TEMP/sftp-host-keys"
-          VERIFIED_KEYS="$RUNNER_TEMP/sftp-verified-host-keys"
-      
-          rm -f "$SCANNED_KEYS" "$VERIFIED_KEYS"
-      
-          echo "Retrieving SSH host keys..."
-      
-          ssh-keyscan \
-            -p "$SFTP_PORT" \
-            "$SFTP_HOST" \
-            > "$SCANNED_KEYS"
-      
-          if [[ ! -s "$SCANNED_KEYS" ]]; then
-            echo "ssh-keyscan returned no host keys." >&2
-            exit 1
-          fi
-      
-          echo "Verifying SSH host fingerprint..."
-      
-          match_found=false
-      
-          while IFS= read -r key_line; do
-            [[ -n "$key_line" ]] || continue
-            [[ "$key_line" == \#* ]] && continue
-      
-            ACTUAL_FINGERPRINT="$(
-              printf '%s\n' "$key_line" |
-                ssh-keygen -lf - -E sha256 |
-                awk '{print $2}'
-            )"
-      
-            echo "Found host key fingerprint: $ACTUAL_FINGERPRINT"
-      
-            if [[ "$ACTUAL_FINGERPRINT" == "$EXPECTED_FINGERPRINT" ]]; then
-              printf '%s\n' "$key_line" >> "$VERIFIED_KEYS"
-              match_found=true
-            fi
-          done < "$SCANNED_KEYS"
-      
-          if [[ "$match_found" != "true" ]]; then
-            echo "SSH host key verification FAILED." >&2
-            echo "None of the server keys matched the expected fingerprint." >&2
-            exit 1
-          fi
-      
-          echo "SSH host fingerprint verified successfully."
-      
-          #
-          # Hash the verified known_hosts entries before storing them.
-          #
-          cp "$VERIFIED_KEYS" "$HOME/.ssh/known_hosts"
-      
-          ssh-keygen \
-            -H \
-            -f "$HOME/.ssh/known_hosts" \
-            >/dev/null 2>&1
-      
-          rm -f "$HOME/.ssh/known_hosts.old"
-      
-          chmod 600 "$HOME/.ssh/known_hosts"
-      
-          echo "Verified host key installed in:"
-          echo "  $HOME/.ssh/known_hosts"
-          
-
 
       - name: Check out application repository
         uses: actions/checkout@v7
@@ -431,7 +333,10 @@ jobs:
           fi
 
       - name: Configure application version in project.json
+        id: app-version
         shell: bash
+        env:
+          SFTP_PATH_LAYOUT: ${{ inputs.sftp-path-layout }}
         run: |
           set -euo pipefail
 
@@ -449,15 +354,21 @@ jobs:
             echo "Application version is empty or invalid; leaving version keys in project.json unchanged."
           fi
 
-          RELEASE_NAME="$APPLICATION_NAME"
-          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == "true" ]]; then
+          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ||
+                "$SFTP_PATH_LAYOUT" == version || "$SFTP_PATH_LAYOUT" == version/platform ]]; then
             if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
               APP_VERSION="$(jq -er '[.MajorVersion // 0, .MinorVersion // 0, .PatchVersion // 0] | map(tostring) | join(".")' "$PROJECT_FILE")"
             fi
-            if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+            if [[ "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+              echo "version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+            elif [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ]]; then
               echo "Cannot name release archives: project application version is invalid." >&2
               exit 1
             fi
+          fi
+
+          RELEASE_NAME="$APPLICATION_NAME"
+          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ]]; then
             RELEASE_NAME="${APPLICATION_NAME}-${APP_VERSION}"
           fi
           echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_ENV"
@@ -588,12 +499,10 @@ jobs:
         if: steps.cache-objo.outputs.cache-hit != 'true'
         shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          URL: ${{ steps.version.outputs.download_url }}
         run: |
           set -euo pipefail
 
-          VERSION="${{ steps.version.outputs.version }}"
-          URL=${{ steps.version.outputs.download_url }}
           ARCHIVE="$RUNNER_TEMP/$(basename "$URL")"
           
           sudo rm -rf /opt/objo-studio
@@ -643,3 +552,667 @@ jobs:
 
           "$OBJO_BIN" license activate --key-file "$LICENSE_FILE"
 
+
+      - name: Publish and archive selected targets
+        id: publish
+        shell: bash
+        env:
+          OBJO_LICENSE_MODE: ${{ steps.version.outputs.license_mode }}
+        run: |
+          set -euo pipefail
+
+          platforms=(linux macos windows)
+          prefixes=(linux osx win)
+          target_inputs=("$RELEASE_TARGETS_LINUX" "$RELEASE_TARGETS_MAC" "$RELEASE_TARGETS_WINDOWS")
+          targets=()
+          target_platforms=()
+
+          for index in "${!platforms[@]}"; do
+            platform="${platforms[index]}"
+            prefix="${prefixes[index]}"
+            IFS=',' read -ra requested <<< "${target_inputs[index]}"
+            [[ "${requested[*]:-}" ]] || continue
+            for rid in "${requested[@]}"; do
+              rid="$(sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' <<< "$rid")"
+              [[ -n "$rid" ]] || continue
+
+              case "$rid" in
+                "$prefix-x64"|"$prefix-arm64") ;;
+                *)
+                  echo "Invalid $platform publish target: $rid" >&2
+                  exit 1
+                  ;;
+              esac
+
+              if [[ " ${targets[*]:-} " != *" $rid "* ]]; then
+                targets+=("$rid")
+                target_platforms+=("$platform")
+              fi
+            done
+          done
+
+          if [[ -z "${targets[*]:-}" ]]; then
+            echo "At least one publish target is required." >&2
+            exit 1
+          fi
+
+          mkdir -p "$OUTPUT_DIRECTORY"
+          release_dir="$(mktemp -d "$OUTPUT_DIRECTORY/objo-release.XXXXXX")"
+          echo "directory=$release_dir" >> "$GITHUB_OUTPUT"
+
+          for index in "${!targets[@]}"; do
+            rid="${targets[index]}"
+            platform="${target_platforms[index]}"
+            target_dir="$(mktemp -d "$RUNNER_TEMP/objo-$rid.XXXXXX")"
+            cmd=("$OBJO_BIN" publish "$SOLUTION_FILE" --rid "$rid" --output "$target_dir")
+            if [[ "$platform" == windows ]]; then
+              cmd+=(--windows-format folder)
+            fi
+            if [[ "$OBJO_LICENSE_MODE" == temporary ]]; then
+              cmd+=(--license-key-env OBJO_LICENSE_KEY)
+            fi
+
+            "${cmd[@]}"
+            if [[ -z "$(find "$target_dir" -type f -print -quit)" ]]; then
+              echo "Objo Studio produced no files for $rid." >&2
+              exit 1
+            fi
+
+            mkdir -p "$release_dir/$platform"
+            tar -czf "$release_dir/$platform/$RELEASE_NAME-$rid.tar.gz" -C "$target_dir" .
+            rm -rf "$target_dir"
+            echo "$platform=true" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Deactivate Objo license
+        if: always() && steps.version.outputs.license_mode == 'persistent' && env.OBJO_BIN != ''
+        shell: bash
+        run: '"$OBJO_BIN" license deactivate'
+        continue-on-error: true
+
+      - name: Upload Linux artifacts
+        id: upload-linux
+        if: steps.publish.outputs.linux == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name-linux }}
+          path: ${{ steps.publish.outputs.directory }}/linux/*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload macOS signing handoff
+        id: upload-macos-handoff
+        if: steps.publish.outputs.macos == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.run_id }}-${{ github.run_attempt }}-macos-signing-handoff
+          path: ${{ steps.publish.outputs.directory }}/macos/*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload Windows signing handoff
+        id: upload-windows-handoff
+        if: steps.publish.outputs.windows == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.run_id }}-${{ github.run_attempt }}-windows-signing-handoff
+          path: ${{ steps.publish.outputs.directory }}/windows/*.tar.gz
+          if-no-files-found: error
+
+  package-macos:
+    name: Sign and package macOS
+    needs: publish-all
+    if: needs.publish-all.outputs.macos != ''
+    runs-on: macos-latest
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Download macOS signing handoff
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.publish-all.outputs.macos }}
+          path: handoff
+
+      - name: Install Apple signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.apple-certificate }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.apple-certificate-password }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CERTIFICATE_PATH="$RUNNER_TEMP/apple-signing-certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/apple-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          : "${APPLE_CERTIFICATE:?Missing apple-certificate}" "${APPLE_CERTIFICATE_PASSWORD:?Missing apple-certificate-password}"
+          trap 'rm -f "$CERTIFICATE_PATH"' EXIT
+          echo "APPLE_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+          printf '%s' "$APPLE_CERTIFICATE" |
+            base64 --decode > "$CERTIFICATE_PATH"
+
+          security create-keychain \
+            -p "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          security set-keychain-settings \
+            -lut 21600 \
+            "$KEYCHAIN_PATH"
+
+          security unlock-keychain \
+            -p "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          security import "$CERTIFICATE_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          security list-keychains \
+            -d user \
+            -s "$KEYCHAIN_PATH" login.keychain-db
+
+          security default-keychain \
+            -d user \
+            -s "$KEYCHAIN_PATH"
+
+          echo "Installed signing identities:"
+          security find-identity \
+            -v \
+            -p codesigning \
+            "$KEYCHAIN_PATH"
+
+      - name: Create Apple notarization profile
+        env:
+          APPLE_NOTARY_PROFILE: ${{ inputs.apple-notary-profile }}
+          APPLE_ID: ${{ secrets.apple-id }}
+          APPLE_TEAM_ID: ${{ secrets.apple-team-id }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.apple-app-specific-password }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : "${APPLE_ID:?Missing apple-id}" "${APPLE_TEAM_ID:?Missing apple-team-id}" "${APPLE_APP_SPECIFIC_PASSWORD:?Missing apple-app-specific-password}"
+          echo "Creating notarization profile: $APPLE_NOTARY_PROFILE"
+
+          xcrun notarytool store-credentials "$APPLE_NOTARY_PROFILE" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --keychain "$APPLE_KEYCHAIN_PATH"
+
+      - name: Sign payloads and notarize disk images
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_NAME: ${{ secrets.apple-certificate-name }}
+          APPLE_NOTARY_PROFILE: ${{ inputs.apple-notary-profile }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_CERTIFICATE_NAME:?Missing apple-certificate-name}"
+
+          mkdir -p release
+          for archive in handoff/*.tar.gz; do
+            name="$(basename "$archive" .tar.gz)"
+            payload="$(mktemp -d "$RUNNER_TEMP/objo-macos.XXXXXX")"
+            tar -xzf "$archive" -C "$payload"
+
+            # Sign Mach-O files and nested bundles before their containing app.
+            signed=false
+            while IFS= read -r -d '' item; do
+              if [[ -d "$item" ]]; then
+                case "$item" in
+                  *.app|*.framework|*.xpc|*.appex) ;;
+                  *) continue ;;
+                esac
+              elif [[ "$(file -b "$item")" != *Mach-O* ]]; then
+                continue
+              fi
+              codesign --force --sign "$APPLE_CERTIFICATE_NAME" --keychain "$APPLE_KEYCHAIN_PATH" \
+                --options runtime --timestamp --preserve-metadata=entitlements "$item"
+              codesign --verify --strict "$item"
+              signed=true
+            done < <(find "$payload" -depth \( -type f -o -type d \) -print0)
+
+            if [[ "$signed" != true ]]; then
+              echo "No signable macOS files in $archive." >&2
+              exit 1
+            fi
+
+            dmg="$PWD/release/$name.dmg"
+            hdiutil create -volname "$name" -srcfolder "$payload" -format UDZO "$dmg"
+            codesign --sign "$APPLE_CERTIFICATE_NAME" --keychain "$APPLE_KEYCHAIN_PATH" --timestamp "$dmg"
+            result="$(xcrun notarytool submit "$dmg" --wait --output-format json \
+              --keychain-profile "$APPLE_NOTARY_PROFILE" --keychain "$APPLE_KEYCHAIN_PATH")"
+            if [[ "$(jq -r '.status' <<< "$result")" != Accepted ]]; then
+              echo "Apple rejected notarization for $dmg." >&2
+              submission="$(jq -r '.id' <<< "$result")"
+              xcrun notarytool log "$submission" --keychain-profile "$APPLE_NOTARY_PROFILE" \
+                --keychain "$APPLE_KEYCHAIN_PATH" >&2 || true
+              exit 1
+            fi
+            xcrun stapler staple "$dmg"
+            xcrun stapler validate "$dmg"
+            rm -rf "$payload"
+          done
+
+      - name: Upload notarized macOS disk images
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name-mac }}
+          path: release/*.dmg
+          if-no-files-found: error
+
+      - name: Remove temporary Apple keychain
+        if: always() && env.APPLE_KEYCHAIN_PATH != ''
+        shell: bash
+        run: |
+          security default-keychain \
+            -d user \
+            -s login.keychain-db || true
+
+          security list-keychains \
+            -d user \
+            -s login.keychain-db || true
+
+          security delete-keychain \
+            "$APPLE_KEYCHAIN_PATH" || true
+
+  package-windows:
+    name: Sign and package Windows
+    needs: publish-all
+    if: needs.publish-all.outputs.windows != ''
+    runs-on: windows-latest
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Download Windows signing handoff
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.publish-all.outputs.windows }}
+          path: handoff
+
+      - name: Extract Windows payloads
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $payloads = Join-Path $env:RUNNER_TEMP 'objo-windows-payloads'
+          New-Item -ItemType Directory -Path $payloads | Out-Null
+          $archives = @(Get-ChildItem -LiteralPath handoff -Filter '*.tar.gz' -File)
+          if ($archives.Count -eq 0) { throw 'No Windows handoff archives were found.' }
+          foreach ($archive in $archives) {
+            $name = $archive.Name -replace '\.tar\.gz$', ''
+            $destination = Join-Path $payloads $name
+            New-Item -ItemType Directory -Path $destination | Out-Null
+            tar.exe -xzf $archive.FullName -C $destination
+            if ($LASTEXITCODE -ne 0) { throw "Could not extract $($archive.Name)." }
+            if (-not (Get-ChildItem -LiteralPath $destination -Filter '*.exe' -File -Recurse -Force)) {
+              throw "No executable found in $($archive.Name)."
+            }
+          }
+          "PAYLOAD_DIRECTORY=$payloads" >> $env:GITHUB_ENV
+
+      - name: Azure Trusted Signing (with timestamp)
+        id: sign-timestamped
+        if: ${{ env.AZURE_TIMESTAMP_URL != '' }}
+        uses: azure/trusted-signing-action@v2
+        env:
+          AZURE_TIMESTAMP_URL: ${{ secrets.azure-timestamp-url }}
+        with:
+          azure-tenant-id: ${{ secrets.azure-tenant-id }}
+          azure-client-id: ${{ secrets.azure-client-id }}
+          azure-client-secret: ${{ secrets.azure-client-secret }}
+          azure-correlation-id: ${{ inputs.azure-correlation-id }}
+
+          endpoint: ${{ secrets.azure-endpoint }}
+          trusted-signing-account-name: ${{ secrets.azure-account-name }}
+          certificate-profile-name: ${{ secrets.azure-certificate-profile-name }}
+
+          files-folder: ${{ env.PAYLOAD_DIRECTORY }}
+          files-folder-filter: exe,dll
+          files-folder-recurse: true
+
+          file-digest: SHA256
+
+          timestamp-rfc3161: ${{ secrets.azure-timestamp-url }}
+          timestamp-digest: SHA256
+
+      - name: Azure Trusted Signing
+        id: sign
+        if: ${{ env.AZURE_TIMESTAMP_URL == '' }}
+        uses: azure/trusted-signing-action@v2
+        env:
+          AZURE_TIMESTAMP_URL: ${{ secrets.azure-timestamp-url }}
+        with:
+          azure-tenant-id: ${{ secrets.azure-tenant-id }}
+          azure-client-id: ${{ secrets.azure-client-id }}
+          azure-client-secret: ${{ secrets.azure-client-secret }}
+          azure-correlation-id: ${{ inputs.azure-correlation-id }}
+
+          endpoint: ${{ secrets.azure-endpoint }}
+          trusted-signing-account-name: ${{ secrets.azure-account-name }}
+          certificate-profile-name: ${{ secrets.azure-certificate-profile-name }}
+
+          files-folder: ${{ env.PAYLOAD_DIRECTORY }}
+          files-folder-filter: exe,dll
+          files-folder-recurse: true
+
+          file-digest: SHA256
+
+      - name: Zip signed Windows payloads
+        shell: pwsh
+        env:
+          TIMESTAMPED_SIGNING_OUTCOME: ${{ steps.sign-timestamped.outcome }}
+          SIGNING_OUTCOME: ${{ steps.sign.outcome }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:TIMESTAMPED_SIGNING_OUTCOME -ne 'success' -and $env:SIGNING_OUTCOME -ne 'success') {
+            throw 'Azure Trusted Signing did not complete successfully.'
+          }
+          $release = (New-Item -ItemType Directory -Path release).FullName
+          foreach ($payload in Get-ChildItem -LiteralPath $env:PAYLOAD_DIRECTORY -Directory) {
+            $zip = Join-Path $release "$($payload.Name).zip"
+            [System.IO.Compression.ZipFile]::CreateFromDirectory(
+              $payload.FullName, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $true
+            )
+          }
+
+      - name: Upload signed Windows archives
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name-windows }}
+          path: release/*.zip
+          if-no-files-found: error
+
+  upload-sftp:
+    name: Upload release archives to SFTP
+    needs: [publish-all, package-macos, package-windows]
+    if: '!cancelled()'
+    runs-on: ubuntu-latest
+    outputs:
+      sftp-upload: ${{ steps.sftp-result.outputs.result }}
+    steps:
+      - name: Validate SFTP configuration
+        id: sftp-config
+        shell: bash
+        env:
+          SFTP_URL: ${{ inputs.sftp-url }}
+          SFTP_USER: ${{ secrets.sftp-username }}
+          SFTP_PASSWORD: ${{ secrets.sftp-password }}
+          SFTP_HOST_FINGERPRINT: ${{ secrets.sftp-host-fingerprint }}
+        run: |
+          set -euo pipefail
+
+          provided=()
+          missing=()
+
+          [[ -n "$SFTP_URL" ]] \
+            && provided+=("sftp-url") \
+            || missing+=("sftp-url")
+
+          [[ -n "$SFTP_USER" ]] \
+            && provided+=("sftp-username") \
+            || missing+=("sftp-username")
+
+          [[ -n "$SFTP_PASSWORD" ]] \
+            && provided+=("sftp-password") \
+            || missing+=("sftp-password")
+
+          [[ -n "$SFTP_HOST_FINGERPRINT" ]] \
+            && provided+=("sftp-host-fingerprint") \
+            || missing+=("sftp-host-fingerprint")
+
+          if (( ${#provided[@]} == 0 )); then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "SFTP upload is disabled."
+            echo "No SFTP configuration values were supplied."
+            exit 0
+          fi
+
+          if (( ${#missing[@]} == 0 )); then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "SFTP upload is enabled."
+            echo "All required SFTP configuration values are present."
+            exit 0
+          fi
+
+          echo "::error::Incomplete SFTP configuration."
+
+          echo "Provided:"
+          for item in "${provided[@]}"; do
+            echo "  - $item"
+          done
+
+          echo "Missing:"
+          for item in "${missing[@]}"; do
+            echo "  - $item"
+          done
+
+          echo
+          echo "Either provide all SFTP configuration values or none of them." >&2
+          exit 1
+
+      - name: Verify and trust SFTP server SSH host key
+        if: >-
+          steps.sftp-config.outputs.enabled == 'true' &&
+          (needs.publish-all.outputs.linux != '' ||
+           (inputs.upload-macos-to-sftp && needs.package-macos.outputs.artifact != '') ||
+           (inputs.upload-windows-to-sftp && needs.package-windows.outputs.artifact != ''))
+        shell: bash
+        env:
+          SFTP_BASE_URL: ${{ inputs.sftp-url }}
+          EXPECTED_FINGERPRINT: ${{ secrets.sftp-host-fingerprint }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$SFTP_BASE_URL" != sftp://* ]]; then
+            echo "sftp-url must start with sftp://." >&2
+            exit 1
+          fi
+
+          #
+          # Strip sftp:// and everything after host[:port].
+          #
+          AUTHORITY="${SFTP_BASE_URL#sftp://}"
+          AUTHORITY="${AUTHORITY%%/*}"
+
+          #
+          # Remove optional user@.
+          #
+          HOST_PORT="${AUTHORITY##*@}"
+
+          SFTP_HOST="$HOST_PORT"
+          SFTP_PORT="22"
+
+          #
+          # Handle host:port.
+          #
+          if [[ "$HOST_PORT" == *:* ]]; then
+            SFTP_HOST="${HOST_PORT%%:*}"
+            SFTP_PORT="${HOST_PORT##*:}"
+          fi
+
+          if [[ -z "$SFTP_HOST" ]]; then
+            echo "Could not extract SFTP hostname." >&2
+            exit 1
+          fi
+
+          echo "SFTP host: $SFTP_HOST"
+          echo "SFTP port: $SFTP_PORT"
+
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+
+          SCANNED_KEYS="$RUNNER_TEMP/sftp-host-keys"
+          VERIFIED_KEYS="$RUNNER_TEMP/sftp-verified-host-keys"
+
+          rm -f "$SCANNED_KEYS" "$VERIFIED_KEYS"
+
+          echo "Retrieving SSH host keys..."
+
+          ssh-keyscan \
+            -p "$SFTP_PORT" \
+            "$SFTP_HOST" \
+            > "$SCANNED_KEYS"
+
+          if [[ ! -s "$SCANNED_KEYS" ]]; then
+            echo "ssh-keyscan returned no host keys." >&2
+            exit 1
+          fi
+
+          echo "Verifying SSH host fingerprint..."
+
+          match_found=false
+
+          while IFS= read -r key_line; do
+            [[ -n "$key_line" ]] || continue
+            [[ "$key_line" == \#* ]] && continue
+
+            ACTUAL_FINGERPRINT="$(
+              printf '%s\n' "$key_line" |
+                ssh-keygen -lf - -E sha256 |
+                awk '{print $2}'
+            )"
+
+            echo "Found host key fingerprint: $ACTUAL_FINGERPRINT"
+
+            if [[ "$ACTUAL_FINGERPRINT" == "$EXPECTED_FINGERPRINT" ]]; then
+              printf '%s\n' "$key_line" >> "$VERIFIED_KEYS"
+              match_found=true
+            fi
+          done < "$SCANNED_KEYS"
+
+          if [[ "$match_found" != "true" ]]; then
+            echo "SSH host key verification FAILED." >&2
+            echo "None of the server keys matched the expected fingerprint." >&2
+            exit 1
+          fi
+
+          echo "SSH host fingerprint verified successfully."
+
+          #
+          # Hash the verified known_hosts entries before storing them.
+          #
+          cp "$VERIFIED_KEYS" "$HOME/.ssh/known_hosts"
+
+          ssh-keygen \
+            -H \
+            -f "$HOME/.ssh/known_hosts" \
+            >/dev/null 2>&1
+
+          rm -f "$HOME/.ssh/known_hosts.old"
+
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+          echo "Verified host key installed in:"
+          echo "  $HOME/.ssh/known_hosts"
+
+      - name: Download Linux release archives
+        if: steps.sftp-config.outputs.enabled == 'true' && needs.publish-all.outputs.linux != ''
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.publish-all.outputs.linux }}
+          path: release/linux
+
+      - name: Download macOS release archives
+        if: steps.sftp-config.outputs.enabled == 'true' && inputs.upload-macos-to-sftp && needs.package-macos.outputs.artifact != ''
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.package-macos.outputs.artifact }}
+          path: release/macos
+
+      - name: Download Windows release archives
+        if: steps.sftp-config.outputs.enabled == 'true' && inputs.upload-windows-to-sftp && needs.package-windows.outputs.artifact != ''
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.package-windows.outputs.artifact }}
+          path: release/windows
+
+      - name: Upload release archives
+        id: sftp
+        if: steps.sftp-config.outputs.enabled == 'true'
+        shell: bash
+        env:
+          SFTP_BASE_URL: ${{ inputs.sftp-url }}
+          SFTP_PATH_LAYOUT: ${{ inputs.sftp-path-layout }}
+          SFTP_APP_VERSION: ${{ needs.publish-all.outputs.app-version }}
+          SFTP_USER: ${{ secrets.sftp-username }}
+          SFTP_PASSWORD: ${{ secrets.sftp-password }}
+          FAIL_ON_SFTP_ERROR: ${{ inputs.fail-on-sftp-error }}
+          LINUX_RESULT: ${{ needs.publish-all.result }}
+          MACOS_RESULT: ${{ needs.package-macos.result }}
+          WINDOWS_RESULT: ${{ needs.package-windows.result }}
+          UPLOAD_MACOS: ${{ inputs.upload-macos-to-sftp }}
+          UPLOAD_WINDOWS: ${{ inputs.upload-windows-to-sftp }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          result=skipped
+          if [[ "$LINUX_RESULT" != success ||
+                ( "$UPLOAD_MACOS" == true && "$MACOS_RESULT" == failure ) ||
+                ( "$UPLOAD_WINDOWS" == true && "$WINDOWS_RESULT" == failure ) ]]; then
+            result=failed
+          fi
+          for file in release/linux/*.tar.gz release/macos/*.dmg release/windows/*.zip; do
+            [[ -f "$file" ]] || continue
+            platform="$(basename "$(dirname "$file")")"
+            if [[ ( "$platform" == macos && "$UPLOAD_MACOS" != true ) ||
+                  ( "$platform" == windows && "$UPLOAD_WINDOWS" != true ) ]]; then
+              continue
+            fi
+            case "$SFTP_PATH_LAYOUT" in
+              platform) remote_directory="$platform" ;;
+              version) remote_directory="$SFTP_APP_VERSION" ;;
+              version/platform) remote_directory="$SFTP_APP_VERSION/$platform" ;;
+              *)
+                echo "::error::sftp-path-layout must be platform, version, or version/platform." >&2
+                result=failed
+                break
+                ;;
+            esac
+            if [[ "$SFTP_PATH_LAYOUT" != platform && -z "$SFTP_APP_VERSION" ]]; then
+              echo "::error::A versioned SFTP path requires a valid application version." >&2
+              result=failed
+              break
+            fi
+            if [[ "$result" == skipped ]]; then
+              result=success
+            fi
+            if ! curl --fail --show-error --silent --ftp-create-dirs \
+              --retry 3 \
+              --retry-all-errors \
+              --user "$SFTP_USER:$SFTP_PASSWORD" --upload-file "$file" \
+              "${SFTP_BASE_URL%/}/$remote_directory/"; then
+              result=failed
+            fi
+          done
+
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+          if [[ "$result" == failed ]]; then
+            echo "::warning::One or more requested SFTP releases could not be uploaded."
+            if [[ "$FAIL_ON_SFTP_ERROR" == true ]]; then
+              exit 2
+            fi
+          fi
+
+      - name: Finalize SFTP result
+        id: sftp-result
+        if: always()
+        shell: bash
+        env:
+          SFTP_ENABLED: ${{ steps.sftp-config.outputs.enabled }}
+          SFTP_CONFIG_OUTCOME: ${{ steps.sftp-config.outcome }}
+          SFTP_RESULT: ${{ steps.sftp.outputs.result }}
+        run: |
+          if [[ "$SFTP_CONFIG_OUTCOME" == success && "$SFTP_ENABLED" != true ]]; then
+            echo "result=skipped" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=${SFTP_RESULT:-failed}" >> "$GITHUB_OUTPUT"
+          fi

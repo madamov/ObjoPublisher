@@ -23,6 +23,55 @@ Using reusable workflows has several advantages:
 | **publish_objo_linux.yml** | Publishes Linux applications for one or more runtime targets. |
 | **publish_objo_windows.yml** | Publishes Windows applications and signs generated MSIX packages using the official Azure Trusted Signing GitHub Action. |
 | **publish_objo_windows_objosign.yml** | Publishes Windows applications and lets Objo Studio perform Azure Trusted Signing during publishing. |
+| **linux_publish_all.yml** | Builds Linux, macOS, and Windows on Ubuntu, then signs and packages macOS and Windows builds on native runners. |
+
+## Example caller for all six targets
+
+Save this workflow in the application repository's `.github/workflows` directory. Use an ObjoPublisher ref that contains `linux_publish_all.yml`.
+
+```yaml
+name: Publish all platforms
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    uses: madamov/ObjoPublisher/.github/workflows/linux_publish_all.yml@v1
+    with:
+      solution-file: MyGreatApp.objosln
+      project-file: Projects/MyGreatApp/project.json
+      targets-linux: "linux-x64, linux-arm64"
+      targets-mac: "osx-x64, osx-arm64"
+      targets-windows: "win-x64, win-arm64"
+      sftp-url: ${{ vars.SFTP_SERVER_URL }}
+      # sftp-path-layout: version/platform
+      upload-macos-to-sftp: true
+      upload-windows-to-sftp: true
+    secrets:
+      objo-license: ${{ secrets.OBJO_LICENSE }}
+
+      apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}
+      apple-certificate-name: ${{ secrets.APPLE_CERTIFICATE_NAME }}
+      apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
+      apple-id: ${{ secrets.APPLE_ID }}
+      apple-app-specific-password: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      azure-endpoint: ${{ secrets.AZURE_ENDPOINT }}
+      azure-account-name: ${{ secrets.AZURE_ACCOUNTNAME }}
+      azure-certificate-profile-name: ${{ secrets.AZURE_CERTIFICATEPROFILENAME }}
+      azure-timestamp-url: ${{ secrets.AZURE_TIMESTAMPURL }} # Optional
+
+      sftp-username: ${{ secrets.BINARIES_USER }}
+      sftp-password: ${{ secrets.BINARIES_PASSWORD }}
+      sftp-host-fingerprint: ${{ secrets.SFTP_HOST_FINGERPRINT }}
+```
+
+The workflow uploads Linux tarballs, signed and notarized macOS DMGs, and signed Windows ZIPs as GitHub Actions artifacts. With SFTP configured, Linux tarballs upload automatically. The macOS and Windows SFTP options each default to `false` and can be enabled independently. To disable SFTP entirely, omit the URL and all three SFTP secrets.
 
 ---
 
