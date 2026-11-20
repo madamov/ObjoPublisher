@@ -85,6 +85,12 @@ on:
         type: string
         default: ""
 
+      sftp-path-layout:
+        description: Remote directory layout below sftp-url (platform, version, or version/platform)
+        required: false
+        type: string
+        default: platform
+
       sftp-url:
         description: Base SFTP URL for artifact upload
         required: false
@@ -153,6 +159,7 @@ jobs:
       APPLICATION_NAME: ${{ inputs.application-name }}
       APP_VERSION: ${{ inputs.app-version }}
       INCLUDE_APP_VERSION_IN_RELEASE_NAME: ${{ inputs.include-app-version-in-release-name }}
+      BUILD_NUMBER: ${{ inputs.build-number }}
       RELEASE_TARGETS: ${{ inputs.targets }}
       WINDOWS_FORMAT: ${{ inputs.windows-format }}
 
@@ -401,7 +408,10 @@ jobs:
           fi
 
       - name: Configure application version in project.json
+        id: app-version
         shell: bash
+        env:
+          SFTP_PATH_LAYOUT: ${{ inputs.sftp-path-layout }}
         run: |
           set -euo pipefail
 
@@ -419,15 +429,21 @@ jobs:
             echo "Application version is empty or invalid; leaving version keys in project.json unchanged."
           fi
 
-          RELEASE_NAME="$APPLICATION_NAME"
-          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == "true" ]]; then
+          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ||
+                "$SFTP_PATH_LAYOUT" == version || "$SFTP_PATH_LAYOUT" == version/platform ]]; then
             if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
               APP_VERSION="$(jq -er '[.MajorVersion // 0, .MinorVersion // 0, .PatchVersion // 0] | map(tostring) | join(".")' "$PROJECT_FILE")"
             fi
-            if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+            if [[ "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
+              echo "version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+            elif [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ]]; then
               echo "Cannot name release archives: project application version is invalid." >&2
               exit 1
             fi
+          fi
+
+          RELEASE_NAME="$APPLICATION_NAME"
+          if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ]]; then
             RELEASE_NAME="${APPLICATION_NAME}-${APP_VERSION}"
           fi
           echo "RELEASE_NAME=$RELEASE_NAME" >> "$GITHUB_ENV"
@@ -435,8 +451,6 @@ jobs:
       - name: Bundle build number as an application resource
         if: inputs.build-number != ''
         shell: bash
-        env:
-          BUILD_NUMBER: ${{ inputs.build-number }}
         run: |
           python - <<'PYTHON'
           import datetime
@@ -706,7 +720,6 @@ jobs:
         id: publish
         shell: pwsh
         env:
-          PUBLISH_TARGETS: ${{ inputs.targets }}
           OBJO_LICENSE_MODE: ${{ steps.version.outputs.license_mode }}
         run: |
           $ErrorActionPreference = "Stop"
@@ -740,7 +753,7 @@ jobs:
       
           $targetCount = 0
       
-          foreach ($targetValue in $env:PUBLISH_TARGETS.Split(",")) {
+          foreach ($targetValue in $env:RELEASE_TARGETS.Split(",")) {
             $target = $targetValue.Trim()
       
             if ([string]::IsNullOrWhiteSpace($target)) {
@@ -937,8 +950,6 @@ jobs:
       - name: Verify packaged build number
         if: inputs.build-number != ''
         shell: bash
-        env:
-          BUILD_NUMBER: ${{ inputs.build-number }}
         run: |
           python - <<'PYTHON'
           import os
@@ -1247,6 +1258,8 @@ jobs:
         shell: pwsh
         env:
           SFTP_BASE_URL: ${{ inputs.sftp-url }}
+          SFTP_PATH_LAYOUT: ${{ inputs.sftp-path-layout }}
+          SFTP_APP_VERSION: ${{ steps.app-version.outputs.version }}
           SFTP_USER: ${{ secrets.sftp-username }}
           SFTP_PASSWORD: ${{ secrets.sftp-password }}
           SFTP_CURL: ${{ steps.sftp-curl.outputs.path }}
@@ -1348,6 +1361,24 @@ jobs:
             }
           }
 
+          if (-not $uploadFailed) {
+            switch -CaseSensitive ($env:SFTP_PATH_LAYOUT) {
+              "platform" { $remoteDirectory = "windows" }
+              "version" { $remoteDirectory = $env:SFTP_APP_VERSION }
+              "version/platform" { $remoteDirectory = "$env:SFTP_APP_VERSION/windows" }
+              default {
+                $uploadFailed = $true
+                $uploadError = "sftp-path-layout must be platform, version, or version/platform."
+              }
+            }
+
+            if (-not $uploadFailed -and $env:SFTP_PATH_LAYOUT -ne "platform" -and
+                [string]::IsNullOrEmpty($env:SFTP_APP_VERSION)) {
+              $uploadFailed = $true
+              $uploadError = "A versioned SFTP path requires a valid application version."
+            }
+          }
+
           #
           # Upload.
           #
@@ -1355,7 +1386,7 @@ jobs:
           if (-not $uploadFailed) {
 
             $destination = `
-              "$($env:SFTP_BASE_URL.TrimEnd('/'))/windows/"
+              "$($env:SFTP_BASE_URL.TrimEnd('/'))/$remoteDirectory/"
 
             Write-Host ""
             Write-Host "Uploading $($files.Count) file(s) to:"

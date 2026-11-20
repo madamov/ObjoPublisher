@@ -23,6 +23,55 @@ Using reusable workflows has several advantages:
 | **publish_objo_linux.yml** | Publishes Linux applications for one or more runtime targets. |
 | **publish_objo_windows.yml** | Publishes Windows applications and signs generated MSIX packages using the official Azure Trusted Signing GitHub Action. |
 | **publish_objo_windows_objosign.yml** | Publishes Windows applications and lets Objo Studio perform Azure Trusted Signing during publishing. |
+| **linux_publish_all.yml** | Builds Linux, macOS, and Windows on Ubuntu, then signs and packages macOS and Windows builds on native runners. |
+
+## Example caller for all six targets
+
+Save this workflow in the application repository's `.github/workflows` directory. Use an ObjoPublisher ref that contains `linux_publish_all.yml`.
+
+```yaml
+name: Publish all platforms
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    uses: madamov/ObjoPublisher/.github/workflows/linux_publish_all.yml@v1
+    with:
+      solution-file: MyGreatApp.objosln
+      project-file: Projects/MyGreatApp/project.json
+      targets-linux: "linux-x64, linux-arm64"
+      targets-mac: "osx-x64, osx-arm64"
+      targets-windows: "win-x64, win-arm64"
+      sftp-url: ${{ vars.SFTP_SERVER_URL }}
+      # sftp-path-layout: version/platform
+      upload-macos-to-sftp: true
+      upload-windows-to-sftp: true
+    secrets:
+      objo-license: ${{ secrets.OBJO_LICENSE }}
+
+      apple-certificate: ${{ secrets.APPLE_CERTIFICATE }}
+      apple-certificate-name: ${{ secrets.APPLE_CERTIFICATE_NAME }}
+      apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
+      apple-id: ${{ secrets.APPLE_ID }}
+      apple-app-specific-password: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+
+      azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+      azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+      azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+      azure-endpoint: ${{ secrets.AZURE_ENDPOINT }}
+      azure-account-name: ${{ secrets.AZURE_ACCOUNTNAME }}
+      azure-certificate-profile-name: ${{ secrets.AZURE_CERTIFICATEPROFILENAME }}
+      azure-timestamp-url: ${{ secrets.AZURE_TIMESTAMPURL }} # Optional
+
+      sftp-username: ${{ secrets.BINARIES_USER }}
+      sftp-password: ${{ secrets.BINARIES_PASSWORD }}
+      sftp-host-fingerprint: ${{ secrets.SFTP_HOST_FINGERPRINT }}
+```
+
+The workflow uploads Linux tarballs, signed and notarized macOS DMGs, and signed Windows ZIPs as GitHub Actions artifacts. With SFTP configured, Linux tarballs upload automatically. The macOS and Windows SFTP options each default to `false` and can be enabled independently. To disable SFTP entirely, omit the URL and all three SFTP secrets.
 
 ---
 
@@ -47,13 +96,17 @@ Before any file is uploaded, the workflow verifies that the SSH host key present
 
 Only after the host key has been successfully verified is the server added to the runner's `known_hosts` file and the upload allowed to continue.
 
-The workflows upload files into a platform-specific subdirectory below `sftp-url`:
+Set the optional `sftp-path-layout` input to choose where each artifact is uploaded.
 
-| Platform | Destination |
-|----------|-------------|
-| macOS | `<sftp-url>/macos/` |
-| Linux | `<sftp-url>/linux/` |
-| Windows | `<sftp-url>/windows/` |
+| `sftp-path-layout` | Destination |
+|--------------------|-------------|
+| `platform` (default) | `<sftp-url>/<platform>/<archive-name>` |
+| `version` | `<sftp-url>/<version>/<archive-name>` |
+| `version/platform` | `<sftp-url>/<version>/<platform>/<archive-name>` |
+
+The platform folder is `linux`, `macos`, or `windows`. Versioned layouts use a valid `app-version` input or fall back to the version in `project.json`. This works independently of `include-app-version-in-release-name`. The workflow creates missing remote directories automatically.
+
+SFTP uploads retry each file up to three times after a failed attempt, with curl's default exponential backoff.
 
 SFTP uploads retry each file up to three times after a failed attempt, with curl's default exponential backoff.
 
@@ -302,6 +355,7 @@ Write workflow summary
 | `apple-notary-profile` | | `objo-notarization` | Name of the temporary notarytool profile. |
 | `objo-version` | | latest | Specific Objo Studio version to use. |
 | `sftp-url` | | empty | Base SFTP URL. SFTP upload is skipped when this or either SFTP credential is missing. |
+| `sftp-path-layout` | | `platform` | SFTP directory layout. Use `platform`, `version`, or `version/platform`. |
 | `fail-on-sftp-error` | | `false` | Exit with code `2` when build succeeds but SFTP upload fails. |
 
 ---
@@ -414,11 +468,13 @@ targets: osx-arm64
 
 only the Apple Silicon DMG is uploaded.
 
-When SFTP is configured, the same collected DMG files are uploaded to:
+By default, SFTP uploads the collected DMG files to:
 
 ```text
 <sftp-url>/macos/
 ```
+
+Set `sftp-path-layout` to use a [versioned directory](#optional-sftp-upload).
 
 ---
 
@@ -463,6 +519,7 @@ jobs:
 
       # Optional SFTP upload
       sftp-url: ${{ vars.SFTP_SERVER_URL }}
+      # sftp-path-layout: version/platform
       fail-on-sftp-error: true
 
     secrets:
@@ -492,7 +549,7 @@ jobs:
 - The downloaded Objo Studio installation is cached by version.
 - If Apple signing is disabled, the workflow still produces valid unsigned DMG files.
 - SFTP upload is skipped unless `sftp-url`, `sftp-username`, and `sftp-password` are all supplied.
-- SFTP artifacts are uploaded under `<sftp-url>/macos/`.
+- SFTP artifacts are uploaded under `<sftp-url>/macos/` by default.
 - The workflow writes a GitHub Actions summary and exposes the `sftp-upload` output.
 
 ---
@@ -563,6 +620,7 @@ Write workflow summary
 | `artifact-name` | | `objo-linux-publish` | Uploaded artifact name. |
 | `objo-version` | | latest | Specific Objo Studio version to use. |
 | `sftp-url` | | empty | Base SFTP URL. SFTP upload is skipped when this or either SFTP credential is missing. |
+| `sftp-path-layout` | | `platform` | SFTP directory layout. Use `platform`, `version`, or `version/platform`. |
 | `fail-on-sftp-error` | | `false` | Exit with code `2` when build succeeds but SFTP upload fails. |
 
 ---
@@ -653,11 +711,13 @@ MyGreatApp-linux-x64.tar.gz
 MyGreatApp-linux-arm64.tar.gz
 ```
 
-When SFTP is configured, the collected artifacts are also uploaded to:
+By default, SFTP uploads the collected artifacts to:
 
 ```text
 <sftp-url>/linux/
 ```
+
+Set `sftp-path-layout` to use a [versioned directory](#optional-sftp-upload).
 
 ---
 
@@ -704,6 +764,7 @@ jobs:
 
       # Optional SFTP upload
       sftp-url: ${{ vars.SFTP_SERVER_URL }}
+      # sftp-path-layout: version/platform
       fail-on-sftp-error: true
 
     secrets:
@@ -726,7 +787,7 @@ jobs:
 - Persistent Objo Studio licenses used with versions earlier than 26.8.4 are deactivated even if publishing fails.
 - Every generated Linux archive is collected and uploaded automatically.
 - SFTP upload is skipped unless all three SFTP values are supplied.
-- SFTP artifacts are uploaded under `<sftp-url>/linux/`.
+- SFTP artifacts are uploaded under `<sftp-url>/linux/` by default.
 - The workflow writes a GitHub Actions summary and exposes the `sftp-upload` output.
 
 ---
@@ -812,6 +873,7 @@ Write workflow summary
 | `objo-version` | | latest | Specific Objo Studio version to use. |
 | `azure-correlation-id` | | generated | Optional Azure signing correlation ID. When omitted, a value based on the application name and GitHub run ID is generated. |
 | `sftp-url` | | empty | Base SFTP URL. SFTP upload is skipped when this or either SFTP credential is missing. |
+| `sftp-path-layout` | | `platform` | SFTP directory layout. Use `platform`, `version`, or `version/platform`. |
 | `fail-on-sftp-error` | | `false` | Exit with code `2` when build succeeds but SFTP upload fails. |
 
 ---
@@ -986,11 +1048,13 @@ com.objo.app.mygreatapp_1.1.0.0_arm64.msix
 
 If multiple packages have the same filename, the workflow adds information from the parent directory to prevent overwriting.
 
-When SFTP is configured, the collected packages are also uploaded to:
+By default, SFTP uploads the collected packages to:
 
 ```text
 <sftp-url>/windows/
 ```
+
+Set `sftp-path-layout` to use a [versioned directory](#optional-sftp-upload).
 
 The workflow prefers an SFTP-capable `curl.exe` installed with Git for Windows and verifies SFTP support before upload.
 
@@ -1045,6 +1109,7 @@ jobs:
 
       # Optional SFTP upload
       sftp-url: ${{ vars.SFTP_SERVER_URL }}
+      # sftp-path-layout: version/platform
       fail-on-sftp-error: true
 
     secrets:
@@ -1081,7 +1146,7 @@ jobs:
 - Objo Studio is cached by version.
 - Timestamping is optional.
 - SFTP upload is skipped unless all three SFTP values are supplied.
-- SFTP artifacts are uploaded under `<sftp-url>/windows/`.
+- SFTP artifacts are uploaded under `<sftp-url>/windows/` by default.
 - The workflow writes a GitHub Actions summary and exposes the `sftp-upload` output.
 
 ---
@@ -1161,6 +1226,9 @@ Upload artifacts
 | `targets` | | `win-x64` | Comma-separated list of Windows runtime identifiers. |
 | `windows-format` | | `MSIX` | Windows output format: `MSIX`, `folder`, or `zip`. With Azure signing, `zip` is published as a folder, signed, and then zipped. Folder output is also zipped after signing for artifact and SFTP upload. |
 | `artifact-name` | | `objo-windows-signed-publish` | Uploaded artifact name. |
+| `sftp-url` | | empty | Base SFTP URL. |
+| `sftp-path-layout` | | `platform` | SFTP directory layout. Use `platform`, `version`, or `version/platform`. |
+| `fail-on-sftp-error` | | `false` | Exit with code `2` when build succeeds but SFTP upload fails. |
 | `objo-version` | | latest | Specific Objo Studio version to use. |
 | `azure-correlation-id` | | generated | Optional Azure correlation ID. When omitted, the workflow generates one automatically. |
 
