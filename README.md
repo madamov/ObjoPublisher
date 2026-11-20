@@ -55,6 +55,8 @@ The workflows upload files into a platform-specific subdirectory below `sftp-url
 | Linux | `<sftp-url>/linux/` |
 | Windows | `<sftp-url>/windows/` |
 
+SFTP uploads retry each file up to three times after a failed attempt, with curl's default exponential backoff.
+
 The `fail-on-sftp-error` boolean input controls what happens when the application build succeeds but SFTP upload fails.
 
 | Build | SFTP upload | `fail-on-sftp-error` | Result |

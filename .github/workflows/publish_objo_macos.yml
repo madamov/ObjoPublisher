@@ -1121,6 +1121,8 @@ jobs:
                 --silent \
                 --ftp-create-dirs \
                 --user "$SFTP_USER:$SFTP_PASSWORD" \
+                --retry 3 \
+                --retry-all-errors \
                 --upload-file "$file" \
                 "${SFTP_DESTINATION}${filename}"
             done

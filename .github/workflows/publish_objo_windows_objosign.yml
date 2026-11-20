@@ -1386,6 +1386,8 @@ jobs:
                 --silent `
                 --ftp-create-dirs `
                 --user "${env:SFTP_USER}:${env:SFTP_PASSWORD}" `
+                --retry 3 `
+                --retry-all-errors `
                 --upload-file $file.FullName `
                 $remoteUrl
 
