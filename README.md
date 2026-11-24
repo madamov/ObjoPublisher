@@ -34,6 +34,11 @@ name: Publish all platforms
 
 on:
   workflow_dispatch:
+    inputs:
+      app-version:
+        description: "Application version (for example, 2.4.0)"
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -41,11 +46,12 @@ jobs:
     with:
       solution-file: MyGreatApp.objosln
       project-file: Projects/MyGreatApp/project.json
+      app-version: ${{ inputs.app-version }}
       targets-linux: "linux-x64, linux-arm64"
       targets-mac: "osx-x64, osx-arm64"
       targets-windows: "win-x64, win-arm64"
       sftp-url: ${{ vars.SFTP_SERVER_URL }}
-      # sftp-path-layout: version/platform
+      sftp-path-layout: version/platform
       upload-macos-to-sftp: true
       upload-windows-to-sftp: true
     secrets:
@@ -72,6 +78,8 @@ jobs:
 ```
 
 The workflow uploads Linux tarballs, signed and notarized macOS DMGs, and signed Windows ZIPs as GitHub Actions artifacts. With SFTP configured, Linux tarballs upload automatically. The macOS and Windows SFTP options each default to `false` and can be enabled independently. To disable SFTP entirely, omit the URL and all three SFTP secrets.
+
+Enter a semantic application version when you select **Run workflow**. For example, `2.4.0` places the archives under `<sftp-url>/2.4.0/linux/`, `<sftp-url>/2.4.0/macos/`, and `<sftp-url>/2.4.0/windows/`.
 
 ---
 
