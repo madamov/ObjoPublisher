@@ -424,7 +424,9 @@ jobs:
             jq --argjson major "${BASH_REMATCH[1]}" \
               --argjson minor "${BASH_REMATCH[2]}" \
               --argjson patch "${BASH_REMATCH[3]}" \
-              '.MajorVersion = $major | .MinorVersion = $minor | .PatchVersion = $patch' \
+              'def assign_version: .MajorVersion = $major | .MinorVersion = $minor | .PatchVersion = $patch;
+               if (.BuildSettings | type) == "object" then .BuildSettings |= assign_version
+               else assign_version end' \
               "$PROJECT_FILE" > "$TMP_FILE"
             mv "$TMP_FILE" "$PROJECT_FILE"
             echo "Using application version from workflow input: $APP_VERSION"
@@ -435,7 +437,7 @@ jobs:
           if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ||
                 "$SFTP_PATH_LAYOUT" == version || "$SFTP_PATH_LAYOUT" == version/platform ]]; then
             if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
-              APP_VERSION="$(jq -er '[.MajorVersion // 0, .MinorVersion // 0, .PatchVersion // 0] | map(tostring) | join(".")' "$PROJECT_FILE")"
+              APP_VERSION="$(jq -er '(.BuildSettings // .) | [.MajorVersion // 0, .MinorVersion // 0, .PatchVersion // 0] | map(tostring) | join(".")' "$PROJECT_FILE")"
             fi
             if [[ "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
               echo "version=$APP_VERSION" >> "$GITHUB_OUTPUT"

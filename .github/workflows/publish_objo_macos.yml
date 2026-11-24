@@ -486,7 +486,9 @@ jobs:
             jq --argjson major "${BASH_REMATCH[1]}" \
               --argjson minor "${BASH_REMATCH[2]}" \
               --argjson patch "${BASH_REMATCH[3]}" \
-              '.MajorVersion = $major | .MinorVersion = $minor | .PatchVersion = $patch' \
+              'def assign_version: .MajorVersion = $major | .MinorVersion = $minor | .PatchVersion = $patch;
+               if (.BuildSettings | type) == "object" then .BuildSettings |= assign_version
+               else assign_version end' \
               "$PROJECT_FILE" > "$TMP_FILE"
             mv "$TMP_FILE" "$PROJECT_FILE"
             echo "Using application version from workflow input: $APP_VERSION"
@@ -497,7 +499,7 @@ jobs:
           if [[ "$INCLUDE_APP_VERSION_IN_RELEASE_NAME" == true ||
                 "$SFTP_PATH_LAYOUT" == version || "$SFTP_PATH_LAYOUT" == version/platform ]]; then
             if [[ ! "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
-              APP_VERSION="$(jq -er '[.MajorVersion // 0, .MinorVersion // 0, .PatchVersion // 0] | map(tostring) | join(".")' "$PROJECT_FILE")"
+              APP_VERSION="$(jq -er '(.BuildSettings // .) | [.MajorVersion // 0, .MinorVersion // 0, .PatchVersion // 0] | map(tostring) | join(".")' "$PROJECT_FILE")"
             fi
             if [[ "$APP_VERSION" =~ $SEMVER_REGEX ]]; then
               echo "version=$APP_VERSION" >> "$GITHUB_OUTPUT"
@@ -948,23 +950,36 @@ jobs:
           echo "Prepared artifacts:"
           ls -lh "$ARTIFACT_DIR"
 
-      - name: Verify packaged build number
-        if: inputs.build-number != ''
+      - name: Verify packaged macOS version and build number
+        if: inputs.include-app-version-in-release-name || inputs.build-number != ''
         shell: bash
+        env:
+          RESOLVED_VERSION: ${{ steps.app-version.outputs.version }}
         run: |
           python3 - <<'PYTHON'
           import os
           from pathlib import Path
+          import re
           import subprocess
           import tempfile
 
-          expected = Path(os.environ["BUILD_METADATA_PATH"]).read_bytes()
+          expected = Path(os.environ["BUILD_METADATA_PATH"]).read_bytes() if os.environ["BUILD_NUMBER"] else None
+          versioned_name = os.environ["INCLUDE_APP_VERSION_IN_RELEASE_NAME"] == "true"
+          version = os.environ["RESOLVED_VERSION"] or os.environ["APP_VERSION"]
+          # The macOS bundle version contains only the numeric SemVer core.
+          bundle_version = re.match(r"^([0-9]+\.[0-9]+\.[0-9]+)(?:[-+]|$)", version)
+          if versioned_name and not bundle_version:
+              raise SystemExit("No resolved version for the versioned DMG filename.")
           artifact_dir = Path(os.environ["OUTPUT_DIRECTORY"]) / "artifacts"
           artifacts = sorted(artifact_dir.glob("*.dmg"))
           if not artifacts:
               raise SystemExit("No published DMGs found to verify.")
 
           for artifact in artifacts:
+              if versioned_name:
+                  prefix = f"{os.environ['APPLICATION_NAME']}-{version}-macOS-"
+                  if artifact.name not in {prefix + "Apple-Silicon.dmg", prefix + "Intel.dmg"}:
+                      raise SystemExit(f"Unexpected versioned DMG filename: {artifact.name}")
               with tempfile.TemporaryDirectory(prefix="objo-build-check-") as mount:
                   subprocess.run(["hdiutil", "attach", str(artifact), "-readonly", "-nobrowse", "-mountpoint", mount], check=True)
                   try:
@@ -972,6 +987,17 @@ jobs:
                       if not apps:
                           raise SystemExit(f"No application bundle found in {artifact.name}")
                       for app in apps:
+                          if bundle_version:
+                              info = app / "Contents" / "Info.plist"
+                              actual = subprocess.run(
+                                  ["plutil", "-extract", "CFBundleShortVersionString", "raw", "-o", "-", str(info)],
+                                  check=True, stdout=subprocess.PIPE, text=True,
+                              ).stdout.strip()
+                              if actual != bundle_version[1]:
+                                  raise SystemExit(f"Wrong bundle version in {artifact.name}: {app.name}; expected {bundle_version[1]}, got {actual!r}")
+                              print(f"Verified {artifact.name}: {app.name} bundle version is {actual}")
+                          if expected is None:
+                              continue
                           resources = [path for path in (app / "Contents" / "Resources").rglob("BUILD_NUMBER.json")
                                        if path.parts[-3:] == ("Resources", "Files", "BUILD_NUMBER.json") and path.is_file()]
                           if not resources:

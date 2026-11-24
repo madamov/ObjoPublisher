@@ -3,6 +3,7 @@ import io
 import json
 import datetime
 import os
+import plistlib
 from pathlib import Path
 import subprocess
 import tarfile
@@ -21,8 +22,10 @@ WRONG = (json.dumps(dict(METADATA, build_number=12), indent=2) + '\n').encode()
 
 def checker(platform):
     text = (WORKFLOWS / f'publish_objo_{platform}.yml').read_text()
-    step = text.split('      - name: Verify packaged build number\n', 1)[1].split('      - name:', 1)[0]
-    assert "if: inputs.build-number != ''" in step
+    name = 'macOS version and build number' if platform == 'macos' else 'build number'
+    step = text.split(f'      - name: Verify packaged {name}\n', 1)[1].split('      - name:', 1)[0]
+    if platform != 'macos':
+        assert "if: inputs.build-number != ''" in step
     script = step.split(" - <<'PYTHON'\n", 1)[1].split('          PYTHON\n', 1)[0]
     return '\n'.join(line[10:] for line in script.splitlines()) + '\n'
 
@@ -135,21 +138,29 @@ class PackagedBuildNumberTests(unittest.TestCase):
 
     def test_macos_mount_cleanup_and_resource_cases(self):
         # Simulate mounting so these failure/cleanup tests can run on any OS.
-        dmg = self.artifacts / 'app.dmg'
+        dmg = self.artifacts / 'App-1.0.1-beta.1-macOS-Apple-Silicon.dmg'
         dmg.touch()
-        cases = [('valid', VALID, True), ('wrong', WRONG, False),
-                 ('missing', None, False), ('no app', None, False)]
-        for name, value, valid in cases:
+        env = dict(self.environment, APPLICATION_NAME='App', APP_VERSION='1.0.1-beta.1',
+                   RESOLVED_VERSION='1.0.1-beta.1', INCLUDE_APP_VERSION_IN_RELEASE_NAME='true')
+        cases = [('valid', VALID, '1.0.1', True), ('wrong build', WRONG, '1.0.1', False),
+                 ('missing', None, '1.0.1', False), ('no app', None, None, False),
+                 ('wrong bundle version', VALID, '1.0.0', False)]
+        for name, value, bundle_version, valid in cases:
             calls = []
-            def hdiutil(arguments, **kwargs):
+            def macos_command(arguments, **kwargs):
+                if arguments[0] == 'plutil':
+                    info = plistlib.loads(Path(arguments[-1]).read_bytes())
+                    return subprocess.CompletedProcess(arguments, 0, stdout=info['CFBundleShortVersionString'] + '\n')
                 calls.append(arguments)
                 if arguments[1] == 'attach' and name != 'no app':
                     resource = Path(arguments[-1]) / 'App.app/Contents/Resources/Resources/Files/BUILD_NUMBER.json'
                     resource.parent.mkdir(parents=True)
+                    info = Path(arguments[-1]) / 'App.app/Contents/Info.plist'
+                    info.write_bytes(plistlib.dumps({'CFBundleShortVersionString': bundle_version}))
                     if value is not None:
                         resource.write_bytes(value)
                 return subprocess.CompletedProcess(arguments, 0)
-            with self.subTest(case=name), patch.dict(os.environ, self.environment), patch('subprocess.run', side_effect=hdiutil), patch('builtins.print'):
+            with self.subTest(case=name), patch.dict(os.environ, env), patch('subprocess.run', side_effect=macos_command), patch('builtins.print'):
                 if valid:
                     exec(compile(checker('macos'), '<macos checker>', 'exec'), {})
                 else:
